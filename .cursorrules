@@ -1,0 +1,18 @@
+# Cursor AI Rules for Explorer
+
+## Context Source Priority
+- Always inspect `../orch_ai_strator/context/repomix-output.xml` first for
+  backend details.
+- Consult the docs in `./docs` for Explorer-specific constraints before
+  reading source files.
+
+## Explorer Constraints
+- Explorer is read-only: never mutate backend data.
+- All data comes from SljivaStore backend APIs described in the docs.
+- Use the `/api/explorer/*` routes for search operations.
+
+## Workflow
+1. Understand the feature request.
+2. Review Explorer docs to capture domain context.
+3. Only read or edit files under `explorer/` unless instructed otherwise.
+

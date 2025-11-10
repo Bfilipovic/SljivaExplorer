@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Orch AI Strator entrypoint for the Explorer project.
+
+if [ $# -eq 0 ]; then
+  echo "🎭 Explorer Orch AI Strator"
+  echo ""
+  echo "Usage: $0 \"Your request here\""
+  echo ""
+  echo "Example:"
+  echo "  $0 \"Bootstrap Explorer search page\""
+  echo ""
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "🎭 Explorer Orch AI Strator Processing: $*"
+echo ""
+
+# Reuse the root Orch AI Strator since it already understands the repo structure.
+cd "${SCRIPT_DIR}/../orch_ai_strator"
+node scripts/orchestrate-mock.js "$*"
+
