@@ -17,6 +17,14 @@ Standalone Explorer application for searching parts and transactions across the 
 
 ## Getting Started
 
+### Prerequisites
+
+See [docs/INSTALLATION.md](./docs/INSTALLATION.md) for complete installation instructions.
+
+**Quick checklist:**
+- Docker (for production) or Node.js 20+ (for development)
+- Git (for cloning repository)
+
 ### Installation
 
 ```bash
