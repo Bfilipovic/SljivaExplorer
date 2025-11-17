@@ -227,9 +227,17 @@ router.get("/parts/:partHash", async (req, res) => {
       // If multiple results, merge them (for now, return first successful result)
       // In future, could aggregate/merge results from multiple stores
       const firstResult = results[0];
+      const allPartials = results.flatMap(r => r.partialTransactions);
 
       res.json({
-        ...firstResult,
+        part: firstResult.part,
+        nft: firstResult.nft,
+        partialTransactions: allPartials,
+        pagination: {
+          total: allPartials.length,
+          skip,
+          limit
+        },
         ...(errors.length > 0 && { errors })
       });
     }
