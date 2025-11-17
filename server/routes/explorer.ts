@@ -122,8 +122,25 @@ router.get("/parts/:partHash", async (req, res) => {
 
       const { part, partialTransactions, pagination } = response.data;
 
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (part?.parent_hash) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(part.parent_hash)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${part.parent_hash}:`, err);
+        }
+      }
+
       res.json({
         part: enrichPart(part, response.storeId, response.storeName),
+        nft,
         partialTransactions: enrichPartialTransactions(
           partialTransactions,
           response.storeId,
@@ -163,8 +180,29 @@ router.get("/parts/:partHash", async (req, res) => {
 
         if (response.data) {
           const { part, partialTransactions, pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (part?.parent_hash) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(part.parent_hash)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${part.parent_hash}:`, err);
+            }
+          }
+          
           results.push({
             part: enrichPart(part, response.storeId, response.storeName),
+            nft,
             partialTransactions: enrichPartialTransactions(
               partialTransactions,
               response.storeId,

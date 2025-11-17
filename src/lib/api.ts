@@ -31,6 +31,7 @@ export async function fetchStores(): Promise<StoreInfo[]> {
 
 interface PartResponse {
   part: ExplorerPart;
+  nft?: ExplorerNFT | null;
   partialTransactions: PartialTransaction[];
   pagination?: {
     total: number;
@@ -126,11 +127,11 @@ export async function searchExplorer(
   switch (mode) {
     case "part": {
       const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
-      const nft = await fetchNftMetadata(data.part.parent_hash);
+      // NFT is now included in the response from the backend
       return {
         kind: "part",
         part: data.part,
-        nft,
+        nft: data.nft ?? null,
         partialTransactions: data.partialTransactions,
         pagination: data.pagination ?? {
           total: data.partialTransactions.length,
