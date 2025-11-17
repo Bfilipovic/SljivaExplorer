@@ -4,12 +4,30 @@ import type {
   ExplorerPart,
   ExplorerNFT,
   PartialTransaction,
-  SearchMode
+  SearchMode,
+  StoreInfo
 } from "./types";
 
 const DEFAULT_BASE = "/api/explorer";
 const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
 const NFT_BASE = "/api/nfts";
+
+/**
+ * Fetch list of available stores.
+ */
+export async function fetchStores(): Promise<StoreInfo[]> {
+  const response = await fetch(`${API_BASE}/stores`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch stores: ${response.status}`);
+  }
+
+  return (await response.json()) as StoreInfo[];
+}
 
 interface PartResponse {
   part: ExplorerPart;
@@ -87,7 +105,7 @@ async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
 export async function searchExplorer(
   mode: SearchMode,
   query: string,
-  options: { page?: number; pageSize?: number } = {}
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
 ): Promise<ExplorerResult> {
   const sanitized = query.trim();
   if (!sanitized) {
@@ -96,10 +114,14 @@ export async function searchExplorer(
 
   const page = Math.max(0, options.page ?? 0);
   const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
-  const paginationParams = {
+  const paginationParams: Record<string, string> = {
     skip: String(page * pageSize),
     limit: String(pageSize),
   };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
 
   switch (mode) {
     case "part": {

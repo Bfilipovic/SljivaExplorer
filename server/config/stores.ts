@@ -1,0 +1,126 @@
+/**
+ * Store Configuration
+ * 
+ * Defines the structure and management of multiple SljivaStore-compatible stores
+ * that the Explorer can query.
+ */
+
+export interface StoreConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  publicKey?: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+/**
+ * Parse store configurations from environment variable.
+ * 
+ * Expected format: JSON array of store objects:
+ * [
+ *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
+ *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
+ * ]
+ */
+function parseStoresFromEnv(): StoreConfig[] {
+  const storesEnv = process.env.EXPLORER_STORES;
+  
+  if (!storesEnv) {
+    return getDefaultStores();
+  }
+
+  try {
+    const parsed = JSON.parse(storesEnv);
+    
+    if (!Array.isArray(parsed)) {
+      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
+      return getDefaultStores();
+    }
+
+    const stores: StoreConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) {
+        console.warn("[Stores Config] Skipping invalid store entry:", item);
+        continue;
+      }
+
+      if (!item.id || !item.name || !item.baseUrl) {
+        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
+        continue;
+      }
+
+      stores.push({
+        id: String(item.id),
+        name: String(item.name),
+        baseUrl: String(item.baseUrl).replace(/\/$/, ""), // Remove trailing slash
+        publicKey: item.publicKey ? String(item.publicKey) : undefined,
+        description: item.description ? String(item.description) : undefined,
+        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true
+      });
+    }
+
+    if (stores.length === 0) {
+      console.warn("[Stores Config] No valid stores found, using defaults");
+      return getDefaultStores();
+    }
+
+    return stores;
+  } catch (error) {
+    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
+    return getDefaultStores();
+  }
+}
+
+/**
+ * Get default store configuration for local development.
+ */
+function getDefaultStores(): StoreConfig[] {
+  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
+  return [
+    {
+      id: "local",
+      name: "Local SljivaStore",
+      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
+      description: "Default local development store",
+      enabled: true
+    }
+  ];
+}
+
+// Load and cache store configurations
+let cachedStores: StoreConfig[] | null = null;
+
+/**
+ * Get all configured stores.
+ * Stores are loaded once on first call and cached.
+ */
+export function getStores(): StoreConfig[] {
+  if (cachedStores === null) {
+    cachedStores = parseStoresFromEnv();
+  }
+  return cachedStores.filter(store => store.enabled !== false);
+}
+
+/**
+ * Get a store by its ID.
+ * @param id Store identifier
+ * @returns Store configuration or undefined if not found
+ */
+export function getStoreById(id: string): StoreConfig | undefined {
+  const stores = getStores();
+  return stores.find(store => store.id === id);
+}
+
+/**
+ * Initialize store configuration (call on server startup).
+ * This will parse and validate stores, logging the results.
+ */
+export function initializeStores(): void {
+  const stores = getStores();
+  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
+  stores.forEach(store => {
+    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
+  });
+}
+

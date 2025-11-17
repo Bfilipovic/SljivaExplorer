@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SearchMode } from "../types";
+  import type { SearchMode, StoreInfo } from "../types";
   import { createEventDispatcher } from "svelte";
 
   const modes: { value: SearchMode; label: string; placeholder: string }[] = [
@@ -15,17 +15,21 @@
   export let query = "";
   export let loading = false;
   export let error: string | null = null;
-  export let onSearch: ((payload: { mode: SearchMode; query: string }) => void) | null = null;
+  export let stores: StoreInfo[] = [];
+  export let selectedStoreId: string | null = null;
+  export let onSearch: ((payload: { mode: SearchMode; query: string; storeId?: string | null }) => void) | null = null;
 
   const dispatch = createEventDispatcher<{
-    search: { mode: SearchMode; query: string };
+    search: { mode: SearchMode; query: string; storeId?: string | null };
     modeChange: { mode: SearchMode };
   }>();
+
+  $: showStoreSelector = stores.length > 1;
 
   function handleSubmit(event: Event) {
     event.preventDefault();
     if (loading) return;
-    const payload = { mode, query };
+    const payload = { mode, query, storeId: selectedStoreId };
     onSearch?.(payload);
     dispatch("search", payload);
   }
@@ -51,6 +55,17 @@
         {/each}
       </select>
     </label>
+    {#if showStoreSelector}
+      <label class="field">
+        <span class="field__label">Store</span>
+        <select bind:value={selectedStoreId} class="field__input" disabled={loading}>
+          <option value={null}>All stores</option>
+          {#each stores as store}
+            <option value={store.id}>{store.name}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     <label class="field">
       <span class="field__label">Value</span>
       <input

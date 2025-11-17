@@ -41,6 +41,12 @@
             <dt>Listing</dt>
             <dd>{result.part.listing ?? "Not Listed"}</dd>
           </div>
+          {#if result.part.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.part.storeName}</dd>
+            </div>
+          {/if}
         </dl>
       </div>
       {#if result.nft}
@@ -115,6 +121,12 @@
             <dt>Timestamp</dt>
             <dd>{formatDate(result.transaction.timestamp)}</dd>
           </div>
+          {#if result.transaction.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.transaction.storeName}</dd>
+            </div>
+          {/if}
         </dl>
       </div>
       <div class="card note-card">

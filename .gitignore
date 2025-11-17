@@ -1,8 +1,29 @@
+# Dependencies
 node_modules/
-.svelte-kit/
-.vite/
-build/
-dist/
-.env*
-.DS_Store
 
+# Build outputs
+dist/
+dist-server/
+.svelte-kit/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/

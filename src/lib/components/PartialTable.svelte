@@ -43,6 +43,7 @@
             <th>Amount</th>
             <th>Chain Hash</th>
             <th>Timestamp</th>
+            <th>Store</th>
           </tr>
         </thead>
         <tbody>
@@ -67,6 +68,7 @@
                 {/if}
               </td>
               <td>{formatDate(partial.timestamp)}</td>
+              <td>{partial.storeName ?? "—"}</td>
             </tr>
           {/each}
         </tbody>

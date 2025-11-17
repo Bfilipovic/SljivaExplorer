@@ -1,11 +1,18 @@
 export type SearchMode = "part" | "transaction";
 
+export interface StoreInfo {
+  id: string;
+  name: string;
+}
+
 export interface ExplorerPart {
   _id: string;
   part_no: number;
   parent_hash: string;
   owner: string;
   listing: string | null;
+  storeId?: string;
+  storeName?: string;
 }
 
 export interface ExplorerNFT {
@@ -33,6 +40,8 @@ export interface PartialTransaction {
   currency: string;
   amount: string;
   timestamp: string;
+  storeId?: string;
+  storeName?: string;
 }
 
 export interface ExplorerTransaction {
@@ -47,6 +56,8 @@ export interface ExplorerTransaction {
   currency: string;
   amount: string;
   timestamp: string;
+  storeId?: string;
+  storeName?: string;
 }
 
 export type ExplorerResult =

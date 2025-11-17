@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import SearchPanel from "./lib/components/SearchPanel.svelte";
   import ResultPanel from "./lib/components/ResultPanel.svelte";
-  import type { ExplorerResult, SearchMode, Pagination } from "./lib/types";
-  import { searchExplorer } from "./lib/api";
+  import type { ExplorerResult, SearchMode, Pagination, StoreInfo } from "./lib/types";
+  import { searchExplorer, fetchStores } from "./lib/api";
 
   const pageSize = 50;
 
@@ -15,8 +15,20 @@
   let pagination: Pagination | null = null;
   let currentPage = 0;
   let theme: "dark" | "light" = "dark";
+  let stores: StoreInfo[] = [];
+  let selectedStoreId: string | null = null;
 
-  async function executeSearch(targetMode: SearchMode, value: string, page = 0) {
+  onMount(async () => {
+    applyTheme();
+    try {
+      stores = await fetchStores();
+    } catch (err) {
+      console.error("Failed to fetch stores:", err);
+      // Continue with empty stores array - will default to "all stores"
+    }
+  });
+
+  async function executeSearch(targetMode: SearchMode, value: string, page = 0, storeId: string | null = null) {
     const input = value.trim();
     if (!input) {
       error = "Please enter a value to search.";
@@ -29,7 +41,11 @@
     error = null;
 
     try {
-      const data = await searchExplorer(targetMode, input, { page, pageSize });
+      const data = await searchExplorer(targetMode, input, { 
+        page, 
+        pageSize,
+        storeId: storeId || undefined
+      });
       result = data;
       pagination = data.pagination;
       currentPage = page;
@@ -42,10 +58,11 @@
     }
   }
 
-  async function handleSearch(event: CustomEvent<{ mode: SearchMode; query: string }>) {
+  async function handleSearch(event: CustomEvent<{ mode: SearchMode; query: string; storeId?: string | null }>) {
     mode = event.detail.mode;
     query = event.detail.query;
-    await executeSearch(mode, query, 0);
+    selectedStoreId = event.detail.storeId ?? null;
+    await executeSearch(mode, query, 0, selectedStoreId);
   }
 
   function handleModeChange(event: CustomEvent<{ mode: SearchMode }>) {
@@ -64,7 +81,7 @@
     if (!pagination) return;
     const pages = totalPages();
     if (page < 0 || page >= pages) return;
-    await executeSearch(mode, query, page);
+    await executeSearch(mode, query, page, selectedStoreId);
   }
 
   function toggleTheme() {
@@ -76,9 +93,6 @@
     document.body.classList.toggle("light-theme", theme === "light");
   }
 
-  onMount(() => {
-    applyTheme();
-  });
 </script>
 
 <main class="app">
@@ -105,6 +119,8 @@
     bind:query
     {loading}
     {error}
+    {stores}
+    bind:selectedStoreId
     on:search={handleSearch}
     on:modeChange={handleModeChange}
   />

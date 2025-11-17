@@ -1,0 +1,1798 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+docs/
+  backend-api-reference.md
+  integration-notes.md
+  README.md
+  running.md
+  session-playbook.md
+  sljivastore-bridge.md
+src/
+  lib/
+    components/
+      PartialTable.svelte
+      ResultPanel.svelte
+      SearchPanel.svelte
+    utils/
+      format.ts
+    api.ts
+    types.ts
+  app.css
+  app.d.ts
+  App.svelte
+  main.ts
+tests/
+  api.test.ts
+  SearchPanel.test.ts
+.cursorrules
+.gitignore
+Dockerfile
+index.html
+orchestrate
+package.json
+README.md
+svelte.config.js
+tsconfig.json
+vite.config.ts
+vitest.config.ts
+vitest.setup.ts
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="docs/backend-api-reference.md">
+# Backend API Reference for Explorer
+
+The Explorer consumes the read-only Explorer endpoints exposed by the
+SljivaStore backend. All URLs shown below are relative to the main backend
+origin (e.g. `https://store.example.com/api`).
+
+## Explorer Endpoints
+
+### `GET /explorer/parts/:partHash`
+- **Description:** Retrieve a part by its hash along with all partial transactions.
+- **Parameters:**
+  - `partHash` — deterministic SHA-256 hash of the part document (see minting notes).
+- **Response:**
+  ```json
+  {
+    "part": {
+      "_id": "string",
+      "part_no": number,
+      "parent_hash": "string",
+      "owner": "string",
+      "listing": null | "string"
+    },
+    "partialTransactions": [
+      {
+        "part": "string",
+        "txId": "string",
+        "from": "string",
+        "to": "string",
+        "nftId": "string",
+        "transaction": "string",
+        "chainTx": "string",
+        "currency": "ETH" | "SOL",
+        "amount": "string",
+        "timestamp": "ISO date"
+      }
+    ]
+  }
+  ```
+
+### `GET /explorer/transactions/id/:txId`
+- **Description:** Look up a completed transaction by its database identifier.
+- **Parameters:**
+  - `txId` — Mongo ObjectId (24 hex chars) or stored string identifier.
+- **Response:** Same `transaction` payload plus `partialTransactions` array as above.
+
+### `GET /explorer/transactions/chain/:chainTx`
+- **Description:** Find a transaction using its on-chain hash/identifier.
+- **Parameters:**
+  - `chainTx` — Raw chain hash (case-sensitive).
+- **Response:** Same shape as `/transactions/id/:txId`.
+
+### `GET /explorer/partial-transactions/part/:partHash`
+- **Description:** Fetch partial transaction history for a part without the part metadata.
+- **Response:** `{ "partialTransactions": [...] }`
+
+### `GET /explorer/partial-transactions/id/:txId`
+- **Description:** Fetch partial transactions for a parent transaction id.
+
+### `GET /explorer/partial-transactions/chain/:chainTx`
+- **Description:** Fetch partial transactions grouped by on-chain hash.
+
+## Related Store Endpoints
+
+The Explorer may reuse the existing store APIs when necessary:
+
+- `GET /nfts/:id` — NFT metadata.
+- `GET /parts/:id` — Raw part document (same as Explorer plus defaults).
+- `GET /userTransactions/:address` — Transaction summaries for wallets.
+
+## Authentication & CORS
+
+- Explorer endpoints are expected to be accessible cross-origin.
+- In production, configure CORS to allow the Explorer host for `/api/explorer/*`.
+- All endpoints are read-only; no credentials are required by default.
+
+## Data Normalisation
+
+- Addresses are stored in lowercase.
+- Part `_id` values are SHA-256 hashes of `{ part_no, parent_hash, owner, listing }`.
+- Transaction amounts are stored as strings; format on the frontend as needed.
+</file>
+
+<file path="docs/integration-notes.md">
+# Integration Notes
+
+## Architecture
+
+- Explorer is a standalone SvelteKit/Vite application (to be scaffolded).
+- Targets read-only browsing; no wallet signing.
+- Shared component patterns with SljivaStore where possible (Tailwind CSS, layout).
+
+## Data Flow
+
+1. User submits a hash/id in the Explorer UI.
+2. Explorer calls the corresponding `/api/explorer/*` endpoint.
+3. Backend normalises parameters (lowercase, ObjectId parsing) before querying MongoDB.
+4. Results are rendered with pagination where applicable.
+
+## Key Considerations
+
+- **Latency:** endpoints hit MongoDB directly, so consider caching client-side.
+- **Rate limiting:** plan for backend throttling if Explorer is public.
+- **Error states:** handle `404` (no data) and `500` (backend issue) gracefully.
+- **Security:** never expose admin routes; Explorer only consumes read APIs.
+
+## Shared Resources
+
+- Styles should align with the existing `frontend/src/lib` design tokens.
+- Reuse utility functions from `frontend/src/lib/api.ts` where helpful.
+- Reference `frontend/src/routes/userTransactions/+page.svelte` for pagination patterns.
+</file>
+
+<file path="docs/README.md">
+# Explorer Documentation
+
+- `backend-api-reference.md` — details REST endpoints served by the SljivaStore backend.
+- `integration-notes.md` — outlines architecture, data contracts, and shared UI patterns.
+- `session-playbook.md` — quick checklist for orchestrated development sessions.
+</file>
+
+<file path="docs/running.md">
+# Running Explorer
+
+## Development (with main project)
+
+1. Start the SljivaStore backend:
+   ```bash
+   cd ../backend
+   npm run dev
+   ```
+2. Start the main SljivaStore frontend (optional, for parity testing):
+   ```bash
+   cd ../frontend
+   npm run dev
+   ```
+3. Run the Explorer in dev mode from this directory:
+   ```bash
+   npm run dev
+   ```
+   - Explorer runs on `http://localhost:4175`
+   - API requests are proxied to `http://localhost:3000/api/*`
+
+## Production build
+
+```bash
+npm run build
+npm run preview
+```
+
+## Docker
+
+Build and run the Explorer container:
+
+```bash
+docker build -t sljivastore-explorer .
+docker run -it --rm -p 4175:4175 sljivastore-explorer
+```
+
+The app will be available at `http://localhost:4175`.
+</file>
+
+<file path="docs/session-playbook.md">
+# Orchestrated Session Playbook
+
+1. **Prep**
+   - Run `npx repomix --output ../orch_ai_strator/context/repomix-output.xml` from repo root.
+   - Review `backend-api-reference.md` for endpoint behaviour.
+2. **Plan**
+   - Define user journey (part lookup, tx lookup) before coding components.
+   - Identify required stores/services in Explorer.
+3. **Implement**
+   - Use `./orchestrate "Your request"` to generate prompts.
+   - Keep work confined to the `explorer/` directory; backend changes stay in root.
+4. **Validate**
+   - Add Explorer-specific tests (Vitest/SvelteKit) when scaffolding is ready.
+   - Manually test against local backend (`npm start` in `/backend`) or staging.
+5. **Document**
+   - Update `docs/` with new flows or API usage notes after each feature.
+</file>
+
+<file path="docs/sljivastore-bridge.md">
+# SljivaStore ↔ Explorer Bridge
+
+## Data Model Reference
+
+- **Parts**
+  - `_id`: SHA-256 hash of `{ part_no, parent_hash, owner, listing }`.
+  - `parent_hash`: NFT identifier produced by `hashObject` during minting.
+  - `owner`: Lowercased wallet address.
+  - `listing`: `null` when not listed; otherwise listing id string.
+
+- **Transactions**
+  - `_id`: Mongo ObjectId (stringified).
+  - `chainTx`: On-chain transaction hash (string).
+  - `buyer` / `seller`: Lowercased addresses.
+  - `amount`: String representation of crypto amount.
+
+- **Partial Transactions**
+  - `part`: Part hash (`parts._id`).
+  - `transaction`: Transaction id (string, may equal `txId`).
+  - `chainTx`: Matches parent transaction `chainTx`.
+
+## Backend Responsibilities
+
+- Endpoints live under `/api/explorer`.
+- Input sanitisation includes trimming, lowercasing, and ObjectId parsing.
+- Responses always stringify ObjectIds so the Explorer can treat them as strings.
+
+## Frontend Guidelines
+
+- Validate user input before issuing requests (basic regex).
+- Support copies of hashes/ids; provide clear empty state messaging.
+- For pagination, use query parameters (`skip`, `limit`) when backend support is added.
+- Avoid mutating backend state; Explorer is read-only.
+</file>
+
+<file path="src/lib/components/PartialTable.svelte">
+<script lang="ts">
+  import type { PartialTransaction, Pagination } from "../types";
+  import { formatAddress, formatAmount, formatDate } from "../utils/format";
+
+  export let title: string;
+  export let partials: PartialTransaction[] = [];
+  export let pagination: Pagination | null = null;
+
+  $: rangeStart =
+    pagination && pagination.total > 0 ? pagination.skip + 1 : partials.length ? 1 : 0;
+  $: rangeEnd =
+    pagination && pagination.total > 0
+      ? Math.min(pagination.skip + pagination.limit, pagination.total)
+      : partials.length;
+
+  function explorerLink(partial: PartialTransaction): string {
+    const hash = partial.chainTx;
+    if (!hash) return "#";
+    const base = partial.currency?.toUpperCase() === "SOL"
+      ? "https://solscan.io/tx/"
+      : "https://etherscan.io/tx/";
+    return `${base}${hash}`;
+  }
+</script>
+
+<section class="card {partials.length ? 'table-card' : ''}">
+  <h3>{title}</h3>
+  {#if !partials.length}
+    <p class="empty">No partial transactions found.</p>
+  {:else}
+    {#if pagination}
+      <div class="summary">
+        Showing {rangeStart}-{rangeEnd} of {pagination.total}
+      </div>
+    {/if}
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Part</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Amount</th>
+            <th>Chain Hash</th>
+            <th>Timestamp</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each partials as partial}
+            <tr>
+              <td>{formatAddress(partial.part)}</td>
+              <td>{formatAddress(partial.from)}</td>
+              <td>{formatAddress(partial.to)}</td>
+              <td>{formatAmount(partial.amount, partial.currency)}</td>
+              <td>
+                {#if partial.chainTx}
+                  <a
+                    href={explorerLink(partial)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="tx-link"
+                  >
+                    {formatAddress(partial.chainTx, 8)}
+                  </a>
+                {:else}
+                  —
+                {/if}
+              </td>
+              <td>{formatDate(partial.timestamp)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</section>
+
+<style>
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+  }
+
+  .table-card {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .card h3 {
+    margin: 0;
+    padding-bottom: 0.75rem;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .table-card h3 {
+    padding: 1.25rem 1.5rem 0.75rem;
+  }
+
+  .summary {
+    padding: 0 1.5rem 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 640px;
+  }
+
+  thead {
+    background: var(--table-header-bg);
+  }
+
+  th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-label);
+  }
+
+  td {
+    padding: 0.9rem 1rem;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    border-top: 1px solid var(--card-border);
+  }
+
+  tr:nth-child(odd) {
+    background: var(--table-row-alt);
+  }
+
+  .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .tx-link {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .tx-link:hover {
+    text-decoration: underline;
+  }
+</style>
+</file>
+
+<file path="src/lib/components/ResultPanel.svelte">
+<script lang="ts">
+  import type { ExplorerResult } from "../types";
+  import { formatAddress, formatAmount, formatDate } from "../utils/format";
+  import PartialTable from "./PartialTable.svelte";
+
+  export let result: ExplorerResult | null = null;
+</script>
+
+{#if !result}
+  <section class="empty-state">
+    <h2>Explorer</h2>
+    <p>Enter a part hash or transaction identifier to explore the SljivaStore network.</p>
+  </section>
+{:else if result.kind === "part"}
+  <section class="result-section">
+    <header>
+      <h2>Part</h2>
+      <span class="badge">Part Hash</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <h3>Part Metadata</h3>
+        <dl>
+          <div>
+            <dt>Part Hash</dt>
+            <dd>{result.part._id}</dd>
+          </div>
+          <div>
+            <dt>Part Number</dt>
+            <dd>{result.part.part_no}</dd>
+          </div>
+          <div>
+            <dt>Parent NFT</dt>
+            <dd>{result.part.parent_hash}</dd>
+          </div>
+          <div>
+            <dt>Owner</dt>
+            <dd>{formatAddress(result.part.owner)}</dd>
+          </div>
+          <div>
+            <dt>Listing</dt>
+            <dd>{result.part.listing ?? "Not Listed"}</dd>
+          </div>
+        </dl>
+      </div>
+      {#if result.nft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if result.nft.imageurl}
+            <figure>
+              <img src={result.nft.imageurl} alt={`NFT ${result.nft.name}`} />
+              <figcaption>{result.nft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{result.nft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{result.nft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(result.nft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      <PartialTable
+        title="Partial Transactions"
+        partials={result.partialTransactions}
+        pagination={result.pagination}
+      />
+    </div>
+  </section>
+{:else if result.kind === "transaction"}
+  <section class="result-section">
+    <header>
+      <h2>Transaction</h2>
+      <span class="badge">Transaction Lookup</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <h3>Summary</h3>
+        <dl>
+          <div>
+            <dt>Transaction ID</dt>
+            <dd>{result.transaction._id}</dd>
+          </div>
+          <div>
+            <dt>Chain Hash</dt>
+            <dd>{result.transaction.chainTx}</dd>
+          </div>
+          <div>
+            <dt>Buyer</dt>
+            <dd>{formatAddress(result.transaction.buyer)}</dd>
+          </div>
+          <div>
+            <dt>Seller</dt>
+            <dd>{formatAddress(result.transaction.seller)}</dd>
+          </div>
+          <div>
+            <dt>Quantity</dt>
+            <dd>{result.transaction.quantity}</dd>
+          </div>
+          <div>
+            <dt>Amount</dt>
+            <dd>{formatAmount(result.transaction.amount, result.transaction.currency)}</dd>
+          </div>
+          <div>
+            <dt>Timestamp</dt>
+            <dd>{formatDate(result.transaction.timestamp)}</dd>
+          </div>
+        </dl>
+      </div>
+      <div class="card note-card">
+        <h3>Partial Transactions</h3>
+        <p>
+          Partial transfers for this transaction are omitted to keep the Explorer responsive.
+          Use the part hash search to inspect individual partial movements.
+        </p>
+      </div>
+    </div>
+  </section>
+{/if}
+
+<style>
+  .empty-state {
+    padding: 2rem;
+    border-radius: 1rem;
+    border: 1px dashed var(--border-muted);
+    text-align: center;
+    color: var(--text-muted);
+  }
+
+  .empty-state h2 {
+    margin-bottom: 0.5rem;
+    font-size: 1.75rem;
+  }
+
+  .result-section {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .badge {
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--badge-text);
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .grid {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  @media (min-width: 1280px) {
+    .grid {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+  }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+  }
+
+  .note-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  .card h3 {
+    margin: 0 0 1rem;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  dl {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  dt {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-label);
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .media-card figure {
+    margin: 0 0 1rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .media-card img {
+    width: 100%;
+    border-radius: 0.75rem;
+    object-fit: cover;
+    max-height: 240px;
+    border: 1px solid var(--image-border);
+  }
+
+  .media-card figcaption {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .media-card .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+</style>
+</file>
+
+<file path="src/lib/components/SearchPanel.svelte">
+<script lang="ts">
+  import type { SearchMode } from "../types";
+  import { createEventDispatcher } from "svelte";
+
+  const modes: { value: SearchMode; label: string; placeholder: string }[] = [
+    { value: "part", label: "Part Hash", placeholder: "Enter part hash" },
+    {
+      value: "transaction",
+      label: "Transaction (ID or Chain Hash)",
+      placeholder: "Enter transaction id or chain hash"
+    }
+  ];
+
+  export let mode: SearchMode = "part";
+  export let query = "";
+  export let loading = false;
+  export let error: string | null = null;
+  export let onSearch: ((payload: { mode: SearchMode; query: string }) => void) | null = null;
+
+  const dispatch = createEventDispatcher<{
+    search: { mode: SearchMode; query: string };
+    modeChange: { mode: SearchMode };
+  }>();
+
+  function handleSubmit(event: Event) {
+    event.preventDefault();
+    if (loading) return;
+    const payload = { mode, query };
+    onSearch?.(payload);
+    dispatch("search", payload);
+  }
+
+  function handleModeChange(event: Event) {
+    const target = event.target as HTMLSelectElement | null;
+    if (!target) return;
+    const next = target.value as SearchMode;
+    mode = next;
+    dispatch("modeChange", { mode });
+  }
+</script>
+
+<form class="search-panel" on:submit={handleSubmit}>
+  <div class="controls">
+    <label class="field">
+      <span class="field__label">Search type</span>
+      <select bind:value={mode} class="field__input" on:change={handleModeChange} disabled={loading}>
+        {#each modes as item}
+          <option value={item.value}>
+            {item.label}
+          </option>
+        {/each}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field__label">Value</span>
+      <input
+        class="field__input"
+        type="text"
+        placeholder={modes.find((item) => item.value === mode)?.placeholder}
+        bind:value={query}
+        spellcheck="false"
+        autocomplete="off"
+        disabled={loading}
+      />
+    </label>
+  </div>
+  <button class="submit" type="submit" disabled={loading}>
+    {#if loading}
+      Searching…
+    {:else}
+      Search
+    {/if}
+  </button>
+  {#if error}
+    <p class="error">{error}</p>
+  {/if}
+</form>
+
+<style>
+  .search-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.5rem;
+    background-color: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    box-shadow: 0 20px 45px var(--card-shadow);
+    backdrop-filter: blur(10px);
+  }
+
+  .controls {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .field {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .field__label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .field__input {
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-size: 1rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .field__input:focus {
+    outline: none;
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-shadow);
+  }
+
+  .submit {
+    justify-self: flex-start;
+    padding: 0.85rem 1.8rem;
+    border-radius: 999px;
+    border: none;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: linear-gradient(135deg, var(--button-gradient-start), var(--button-gradient-end));
+    color: var(--button-text);
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  }
+
+  .submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .submit:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 30px var(--button-shadow);
+  }
+
+  .error {
+    margin: 0;
+    color: var(--danger);
+    font-size: 0.95rem;
+  }
+</style>
+</file>
+
+<file path="src/lib/utils/format.ts">
+export function formatAddress(value: string, length = 6): string {
+  if (!value) return "";
+  const start = value.slice(0, length + 2);
+  const end = value.slice(-length);
+  return `${start}…${end}`;
+}
+
+export function formatDate(value: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+export function formatAmount(amount: string, currency: string): string {
+  const numeric = Number.parseFloat(amount);
+  if (Number.isNaN(numeric)) {
+    return `${amount} ${currency}`;
+  }
+  return `${numeric.toFixed(4)} ${currency.toUpperCase()}`;
+}
+</file>
+
+<file path="src/lib/api.ts">
+import type {
+  ExplorerResult,
+  ExplorerTransaction,
+  ExplorerPart,
+  ExplorerNFT,
+  PartialTransaction,
+  SearchMode
+} from "./types";
+
+const DEFAULT_BASE = "/api/explorer";
+const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
+const NFT_BASE = "/api/nfts";
+
+interface PartResponse {
+  part: ExplorerPart;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  };
+}
+
+interface TransactionResponse {
+  transaction: ExplorerTransaction;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  };
+}
+
+async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const url = `${API_BASE}${path}${query}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    const message = await parseError(response);
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function parseError(response: Response): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === "string") {
+      return data.error;
+    }
+  } catch {
+    // ignore
+  }
+  return `Request failed with status ${response.status}`;
+}
+
+async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
+  if (!nftId) return null;
+  const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  try {
+    const data = (await response.json()) as ExplorerNFT;
+    return {
+      ...data,
+      partialTransactions: data.partialTransactions ?? [],
+      pagination: data.pagination ?? null
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function searchExplorer(
+  mode: SearchMode,
+  query: string,
+  options: { page?: number; pageSize?: number } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  switch (mode) {
+    case "part": {
+      const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
+      const nft = await fetchNftMetadata(data.part.parent_hash);
+      return {
+        kind: "part",
+        part: data.part,
+        nft,
+        partialTransactions: data.partialTransactions,
+        pagination: data.pagination ?? {
+          total: data.partialTransactions.length,
+          skip: page * pageSize,
+          limit: pageSize
+        }
+      };
+    }
+    case "transaction": {
+      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
+      const path = isObjectId
+        ? `/transactions/id/${encodeURIComponent(sanitized)}`
+        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
+      const data = await request<TransactionResponse>(path, paginationParams);
+      return {
+        kind: "transaction",
+        transaction: data.transaction,
+        partialTransactions: data.partialTransactions ?? [],
+        pagination: null
+      };
+    }
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`Unsupported search mode: ${exhaustive}`);
+    }
+  }
+}
+</file>
+
+<file path="src/lib/types.ts">
+export type SearchMode = "part" | "transaction";
+
+export interface ExplorerPart {
+  _id: string;
+  part_no: number;
+  parent_hash: string;
+  owner: string;
+  listing: string | null;
+}
+
+export interface ExplorerNFT {
+  _id: string;
+  name: string;
+  description: string;
+  creator: string;
+  imageurl?: string;
+}
+
+export interface Pagination {
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface PartialTransaction {
+  part: string;
+  txId?: string;
+  transaction?: string;
+  from: string;
+  to: string;
+  nftId: string;
+  chainTx: string;
+  currency: string;
+  amount: string;
+  timestamp: string;
+}
+
+export interface ExplorerTransaction {
+  _id: string;
+  listingId: string;
+  reservationId: string;
+  buyer: string;
+  seller: string;
+  nftId: string;
+  quantity: number;
+  chainTx: string;
+  currency: string;
+  amount: string;
+  timestamp: string;
+}
+
+export type ExplorerResult =
+  | {
+      kind: "part";
+      part: ExplorerPart;
+      nft: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination;
+    }
+  | {
+      kind: "transaction";
+      transaction: ExplorerTransaction;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination | null;
+    };
+</file>
+
+<file path="src/app.css">
+:root {
+  color-scheme: dark;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --bg-start: #0f172a;
+  --bg-end: #1e293b;
+  --text-primary: #f8fafc;
+  --text-secondary: rgba(226, 232, 240, 0.85);
+  --text-muted: rgba(226, 232, 240, 0.75);
+  --text-label: rgba(148, 163, 184, 0.9);
+  --card-bg: rgba(15, 23, 42, 0.72);
+  --card-border: rgba(148, 163, 184, 0.35);
+  --card-shadow: rgba(15, 23, 42, 0.35);
+  --input-bg: rgba(15, 23, 42, 0.75);
+  --input-border: rgba(148, 163, 184, 0.35);
+  --accent-border: rgba(94, 234, 212, 0.5);
+  --accent-shadow: rgba(45, 212, 191, 0.2);
+  --button-gradient-start: #0ea5e9;
+  --button-gradient-end: #22d3ee;
+  --button-text: #0f172a;
+  --button-shadow: rgba(34, 211, 238, 0.35);
+  --badge-bg: rgba(56, 189, 248, 0.2);
+  --badge-text: #38bdf8;
+  --border-muted: rgba(148, 163, 184, 0.35);
+  --image-border: rgba(148, 163, 184, 0.25);
+  --accent: #22d3ee;
+  --danger: #f87171;
+  --table-header-bg: rgba(51, 65, 85, 0.6);
+  --table-row-alt: rgba(148, 163, 184, 0.05);
+}
+
+body.light-theme {
+  color-scheme: light;
+  --bg-start: #f8fafc;
+  --bg-end: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: rgba(30, 41, 59, 0.85);
+  --text-muted: rgba(30, 41, 59, 0.6);
+  --text-label: rgba(30, 41, 59, 0.7);
+  --card-bg: rgba(255, 255, 255, 0.92);
+  --card-border: rgba(148, 163, 184, 0.4);
+  --card-shadow: rgba(15, 23, 42, 0.12);
+  --input-bg: rgba(255, 255, 255, 1);
+  --input-border: rgba(148, 163, 184, 0.45);
+  --accent-border: rgba(14, 165, 233, 0.35);
+  --accent-shadow: rgba(14, 165, 233, 0.2);
+  --button-text: #0f172a;
+  --button-shadow: rgba(14, 165, 233, 0.3);
+  --badge-bg: rgba(14, 165, 233, 0.12);
+  --badge-text: #0369a1;
+  --border-muted: rgba(148, 163, 184, 0.45);
+  --image-border: rgba(148, 163, 184, 0.4);
+  --accent: #0284c7;
+  --danger: #dc2626;
+  --table-header-bg: rgba(226, 232, 240, 0.85);
+  --table-row-alt: rgba(148, 163, 184, 0.12);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
+  color: var(--text-primary);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+}
+</file>
+
+<file path="src/app.d.ts">
+/// <reference types="svelte" />
+/// <reference types="vite/client" />
+</file>
+
+<file path="src/App.svelte">
+<script lang="ts">
+  import { onMount } from "svelte";
+  import SearchPanel from "./lib/components/SearchPanel.svelte";
+  import ResultPanel from "./lib/components/ResultPanel.svelte";
+  import type { ExplorerResult, SearchMode, Pagination } from "./lib/types";
+  import { searchExplorer } from "./lib/api";
+
+  const pageSize = 50;
+
+  let mode: SearchMode = "part";
+  let query = "";
+  let loading = false;
+  let error: string | null = null;
+  let result: ExplorerResult | null = null;
+  let pagination: Pagination | null = null;
+  let currentPage = 0;
+  let theme: "dark" | "light" = "dark";
+
+  async function executeSearch(targetMode: SearchMode, value: string, page = 0) {
+    const input = value.trim();
+    if (!input) {
+      error = "Please enter a value to search.";
+      result = null;
+      pagination = null;
+      return;
+    }
+
+    loading = true;
+    error = null;
+
+    try {
+      const data = await searchExplorer(targetMode, input, { page, pageSize });
+      result = data;
+      pagination = data.pagination;
+      currentPage = page;
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Unexpected error";
+      result = null;
+      pagination = null;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function handleSearch(event: CustomEvent<{ mode: SearchMode; query: string }>) {
+    mode = event.detail.mode;
+    query = event.detail.query;
+    await executeSearch(mode, query, 0);
+  }
+
+  function handleModeChange(event: CustomEvent<{ mode: SearchMode }>) {
+    mode = event.detail.mode;
+    error = null;
+    pagination = null;
+    currentPage = 0;
+  }
+
+  function totalPages() {
+    if (!pagination) return 0;
+    return Math.max(1, Math.ceil(pagination.total / pagination.limit));
+  }
+
+  async function goToPage(page: number) {
+    if (!pagination) return;
+    const pages = totalPages();
+    if (page < 0 || page >= pages) return;
+    await executeSearch(mode, query, page);
+  }
+
+  function toggleTheme() {
+    theme = theme === "dark" ? "light" : "dark";
+    applyTheme();
+  }
+
+  function applyTheme() {
+    document.body.classList.toggle("light-theme", theme === "light");
+  }
+
+  onMount(() => {
+    applyTheme();
+  });
+</script>
+
+<main class="app">
+  <header class="hero">
+    <div class="hero__text">
+      <h1>SljivaStore Explorer</h1>
+      <p class="subtitle">
+        Search parts, transactions, and partial transfers across the network.
+      </p>
+    </div>
+    <div class="hero__actions">
+      <div class="status">
+        <span class="status__dot"></span>
+        <span>Connected to backend</span>
+      </div>
+      <button class="theme-toggle" type="button" on:click={toggleTheme}>
+        {theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      </button>
+    </div>
+  </header>
+
+  <SearchPanel
+    bind:mode
+    bind:query
+    {loading}
+    {error}
+    on:search={handleSearch}
+    on:modeChange={handleModeChange}
+  />
+
+  <ResultPanel {result} />
+
+  {#if pagination && pagination.total > pagination.limit}
+    <nav class="pager">
+      <button
+        type="button"
+        class="pager__button"
+        on:click={() => goToPage(currentPage - 1)}
+        disabled={loading || currentPage === 0}
+      >
+        Previous
+      </button>
+      <span class="pager__info">
+        Page {currentPage + 1} of {totalPages()}
+      </span>
+      <button
+        type="button"
+        class="pager__button"
+        on:click={() => goToPage(currentPage + 1)}
+        disabled={loading || currentPage + 1 >= totalPages()}
+      >
+        Next
+      </button>
+    </nav>
+  {/if}
+</main>
+
+<style>
+  .app {
+    min-height: 100vh;
+    padding: 2.5rem clamp(1rem, 5vw, 4rem);
+    display: grid;
+    gap: 2rem;
+    color: var(--text-primary);
+  }
+
+  .hero {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    background: var(--card-bg);
+    border-radius: 1.25rem;
+    padding: 2rem;
+    border: 1px solid var(--card-border);
+    box-shadow: 0 24px 55px var(--card-shadow);
+  }
+
+  @media (min-width: 900px) {
+    .hero {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+    }
+  }
+
+  .hero__text {
+    max-width: 640px;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(2.2rem, 3vw, 2.8rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+
+  .subtitle {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    max-width: 48ch;
+    font-size: 1.05rem;
+  }
+
+  .hero__actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.9rem;
+    color: var(--text-label);
+    font-weight: 500;
+  }
+
+  .status__dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: radial-gradient(circle at center, #34d399 0, #10b981 60%, rgba(16, 185, 129, 0) 100%);
+    box-shadow: 0 0 12px rgba(45, 212, 191, 0.45);
+  }
+
+  .theme-toggle {
+    padding: 0.75rem 1.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+
+  .theme-toggle:hover {
+    background: var(--card-border);
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+
+  .pager__button {
+    padding: 0.65rem 1.2rem;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.2s ease, opacity 0.2s ease;
+  }
+
+  .pager__button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pager__button:not(:disabled):hover {
+    background: var(--card-border);
+  }
+
+  .pager__info {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+</style>
+</file>
+
+<file path="src/main.ts">
+import "./app.css";
+import App from "./App.svelte";
+import { mount } from "svelte";
+
+const target = document.getElementById("app");
+
+if (!target) {
+  throw new Error("Root element #app not found");
+}
+
+export default mount(App, {
+  target
+});
+</file>
+
+<file path="tests/api.test.ts">
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { searchExplorer } from "../src/lib/api";
+
+function mockResponse(response: unknown, ok = true) {
+  return {
+    ok,
+    json: vi.fn().mockResolvedValue(response),
+    status: ok ? 200 : 500
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("searchExplorer", () => {
+  it("fetches part data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+            partialTransactions: [],
+            pagination: { total: 1, skip: 0, limit: 50 }
+          })
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            _id: "nft",
+            name: "Test NFT",
+            description: "Desc",
+            creator: "0xabc",
+            imageurl: "https://example.com/img.png"
+          })
+        )
+    );
+
+    const result = await searchExplorer("part", "hash");
+    expect(result.kind).toBe("part");
+    if (result.kind === "part") {
+      expect(result.part._id).toBe("hash");
+      expect(result.nft?.imageurl).toBe("https://example.com/img.png");
+    }
+  });
+
+  it("throws on error response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: vi.fn().mockResolvedValue({ error: "Not found" })
+      })
+    );
+
+    await expect(searchExplorer("part", "missing")).rejects.toThrow("Not found");
+  });
+});
+</file>
+
+<file path="tests/SearchPanel.test.ts">
+import { fireEvent, render } from "@testing-library/svelte";
+import { describe, expect, it, vi } from "vitest";
+import SearchPanel from "../src/lib/components/SearchPanel.svelte";
+
+describe("SearchPanel", () => {
+  it("emits search event with current mode and query", async () => {
+    const onSearch = vi.fn();
+    const { getByLabelText, getByText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        onSearch
+      }
+    });
+
+    const input = getByLabelText("Value") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "part-hash" } });
+
+    const submit = getByText("Search");
+    await fireEvent.click(submit);
+
+    expect(onSearch).toHaveBeenCalledWith({ mode: "part", query: "part-hash" });
+  });
+
+  it("disables controls while loading", () => {
+    const { getByText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        loading: true
+      }
+    });
+
+    const submit = getByText("Searching…") as HTMLButtonElement;
+    expect(submit).toBeDisabled();
+  });
+});
+</file>
+
+<file path=".cursorrules">
+# Cursor AI Rules for Explorer
+
+## Context Source Priority
+- Always inspect `../orch_ai_strator/context/repomix-output.xml` first for
+  backend details.
+- Consult the docs in `./docs` for Explorer-specific constraints before
+  reading source files.
+
+## Explorer Constraints
+- Explorer is read-only: never mutate backend data.
+- All data comes from SljivaStore backend APIs described in the docs.
+- Use the `/api/explorer/*` routes for search operations.
+
+## Workflow
+1. Understand the feature request.
+2. Review Explorer docs to capture domain context.
+3. Only read or edit files under `explorer/` unless instructed otherwise.
+</file>
+
+<file path=".gitignore">
+node_modules/
+.svelte-kit/
+.vite/
+build/
+dist/
+.env*
+.DS_Store
+</file>
+
+<file path="Dockerfile">
+#
+# Multi-stage build for Explorer frontend
+#
+
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install --frozen-lockfile
+
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Serve with a minimal Node static server
+RUN npm install --global serve@14.2.0
+
+COPY --from=build /app/dist ./dist
+
+EXPOSE 4175
+
+CMD ["serve", "-s", "dist", "-l", "4175"]
+</file>
+
+<file path="index.html">
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SljivaStore Explorer</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+</file>
+
+<file path="orchestrate">
+#!/bin/bash
+
+# Orch AI Strator entrypoint for the Explorer project.
+
+if [ $# -eq 0 ]; then
+  echo "🎭 Explorer Orch AI Strator"
+  echo ""
+  echo "Usage: $0 \"Your request here\""
+  echo ""
+  echo "Example:"
+  echo "  $0 \"Bootstrap Explorer search page\""
+  echo ""
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "🎭 Explorer Orch AI Strator Processing: $*"
+echo ""
+
+# Reuse the root Orch AI Strator since it already understands the repo structure.
+cd "${SCRIPT_DIR}/../orch_ai_strator"
+node scripts/orchestrate-mock.js "$*"
+</file>
+
+<file path="package.json">
+{
+  "name": "explorer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --host 0.0.0.0 --port 4175",
+    "build": "vite build",
+    "preview": "vite preview --port 4175",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "svelte": "^5.38.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tsconfig/svelte": "^5.0.2",
+    "@types/node": "^20.12.12",
+    "jsdom": "^24.0.0",
+    "svelte-check": "^4.0.0",
+    "tslib": "^2.6.2",
+    "typescript": "^5.0.0",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "@testing-library/svelte": "^5.0.0",
+    "@testing-library/jest-dom": "^6.4.2",
+    "@sveltejs/vite-plugin-svelte-inspector": "^4.0.1"
+  }
+}
+</file>
+
+<file path="README.md">
+# Explorer Frontend
+
+This directory will host the standalone Explorer application. The Explorer is
+responsible for searching parts and transactions across the SljivaStore network.
+
+## Goals
+
+- Discover parts by hash
+- Look up completed transactions by their transaction id or on-chain hash
+- Enumerate partial transactions for a part or a chain transaction
+- Provide a read-only experience that mirrors the main store data model
+
+## Getting Started
+
+```bash
+cd explorer
+npm install
+npm run dev         # starts Vite on http://localhost:4175 with /api proxy
+npm run test        # runs Vitest (jsdom)
+npm run build       # creates production bundle in dist/
+npm run preview     # serves built bundle locally
+```
+
+- Run `./orchestrate "Your task"` for AI workflows.
+- Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks.
+- For Docker deployment see `docs/running.md`.
+
+The Explorer is read-only and reuses the main SljivaStore backend through the
+`/api/explorer/*` endpoints.
+</file>
+
+<file path="svelte.config.js">
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+
+export default {
+  preprocess: vitePreprocess(),
+  compilerOptions: {
+    dev: process.env.NODE_ENV !== "production"
+  }
+};
+</file>
+
+<file path="tsconfig.json">
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*", "vite.config.ts", "svelte.config.js"]
+}
+</file>
+
+<file path="vite.config.ts">
+import { defineConfig, loadEnv } from "vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const backendUrl = env.VITE_BACKEND_URL || "http://localhost:3000";
+
+  return {
+    plugins: [svelte()],
+    server: {
+      port: 4175,
+      proxy: {
+        "/api": {
+          target: backendUrl,
+          changeOrigin: true,
+          secure: false
+        }
+      }
+    },
+    preview: {
+      port: 4175
+    },
+    build: {
+      outDir: "dist"
+    }
+  };
+});
+</file>
+
+<file path="vitest.config.ts">
+import { defineConfig } from "vitest/config";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+
+export default defineConfig({
+  plugins: [svelte()],
+  resolve: {
+    conditions: ["browser", "development"],
+    dedupe: ["svelte"]
+  },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./vitest.setup.ts"]
+  }
+});
+</file>
+
+<file path="vitest.setup.ts">
+import "@testing-library/jest-dom";
+</file>
+
+</files>
