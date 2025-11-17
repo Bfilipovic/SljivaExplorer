@@ -34,11 +34,22 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # Extract current stores or use empty array
-CURRENT_STORES=$(grep "^EXPLORER_STORES=" "$ENV_FILE" | cut -d'=' -f2- | sed "s/^'//; s/'$//" || echo '[]')
+CURRENT_STORES=$(grep "^EXPLORER_STORES=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed "s/^'//; s/'$//" || echo '[]')
+
+# Validate JSON or default to empty array
+if [ -z "$CURRENT_STORES" ] || [ "$CURRENT_STORES" = "" ]; then
+  CURRENT_STORES='[]'
+fi
 
 # Create temp file for JSON processing
 TEMP_JSON=$(mktemp)
 echo "$CURRENT_STORES" > "$TEMP_JSON"
+
+# Validate JSON before parsing
+if ! node -e "JSON.parse(require('fs').readFileSync('$TEMP_JSON', 'utf-8'))" 2>/dev/null; then
+  echo "⚠️  Invalid JSON in EXPLORER_STORES, resetting to empty array"
+  echo '[]' > "$TEMP_JSON"
+fi
 
 # Parse JSON and add new store
 NEW_STORES=$(node -e "
