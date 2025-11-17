@@ -4,6 +4,8 @@ Complete guide for deploying the Explorer in production and managing store conne
 
 ## Quick Start
 
+**Recommended order:**
+
 ```bash
 # 1. Deploy Explorer
 git clone <explorer-repo>
@@ -11,15 +13,21 @@ cd explorer
 docker build -t explorer .
 docker run -d -p 4175:4175 --env-file .env.production explorer
 
-# 2. Add a store to Explorer
-./scripts/discover-store.sh https://store.example.com
-# OR
-./scripts/add-store.sh main "Store Name" https://store.example.com/api/explorer
-
-# 3. Enable Explorer on store
-cd ../backend
+# 2. Enable Explorer on store (set CORS) - DO THIS FIRST
+cd ../backend  # or navigate to your store's backend directory
 ./scripts/enable-explorer.sh https://explorer.example.com
+
+# 3. Add store to Explorer (after CORS is enabled)
+cd ../explorer  # or navigate to your explorer directory
+./scripts/discover-store.sh https://store.example.com
+# OR manually:
+./scripts/add-store.sh main "Store Name" https://store.example.com/api/explorer
 ```
+
+**Why this order?**
+- Discovery (`/.well-known/store-info`) works without CORS (it's a public endpoint)
+- But Explorer needs CORS enabled to query the actual API routes (`/api/explorer/**`)
+- Enabling CORS first ensures Explorer can query immediately after being added
 
 ## Table of Contents
 
@@ -171,6 +179,8 @@ server {
 
 ## Adding a Store to Explorer
 
+**Note:** Make sure you've enabled Explorer access on the store first (see [Enabling Explorer Access](#enabling-explorer-access-on-a-store)) so Explorer can query the API immediately after being added.
+
 ### Method 1: Using Helper Script (Easiest)
 
 ```bash
@@ -256,6 +266,10 @@ If stores expose `/.well-known/store-info`, Explorer can discover them automatic
 ---
 
 ## Enabling Explorer Access on a Store
+
+**⚠️ Important: Enable Explorer access BEFORE adding the store to Explorer.**
+
+This ensures Explorer can immediately query the store's API after being added. The discovery endpoint works without CORS, but the actual API routes require it.
 
 To allow Explorer to query your SljivaStore backend, you need to:
 
