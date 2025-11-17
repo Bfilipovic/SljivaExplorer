@@ -26,25 +26,12 @@ Complete guide for installing all prerequisites needed to run the Explorer.
 
 ### Ubuntu/Debian
 
+**Option 1: Official Docker Installation Script (Recommended - Most Reliable)**
+
 ```bash
-# Update package index
-sudo apt update
-
-# Install prerequisites
-sudo apt install -y ca-certificates curl gnupg lsb-release
-
-# Add Docker's official GPG key
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-
-# Set up Docker repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# Install Docker Engine
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# Download and run official Docker installation script
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 
 # Add your user to docker group (to run without sudo)
 sudo usermod -aG docker $USER
@@ -53,7 +40,56 @@ sudo usermod -aG docker $USER
 sudo systemctl enable docker
 sudo systemctl start docker
 
+# Verify installation
+sudo docker run hello-world
+
 # Log out and back in for group changes to take effect
+# After logging back in, you can run docker without sudo
+```
+
+**Option 2: Manual Installation (Alternative)**
+
+If the script doesn't work, try manual installation:
+
+```bash
+# Update package index
+sudo apt update
+
+# Install prerequisites
+sudo apt install -y ca-certificates curl gnupg lsb-release
+
+# Remove old Docker versions if any
+sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+
+# Add Docker's official GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Detect distribution
+DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+CODENAME=$(lsb_release -cs)
+
+# Set up Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${DISTRO} \
+  ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Update package index again
+sudo apt update
+
+# Install Docker Engine
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add your user to docker group
+sudo usermod -aG docker $USER
+
+# Start Docker service
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Verify
+sudo docker run hello-world
 ```
 
 ### macOS

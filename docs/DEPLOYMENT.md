@@ -34,9 +34,47 @@ cd ../backend
 
 ### Prerequisites
 
-- Node.js 20+ installed
-- Docker installed (optional, for containerized deployment)
+- **Docker** installed (see [INSTALLATION.md](./INSTALLATION.md) for Docker setup)
+- **Git** installed
 - Access to the Explorer repository
+
+### Minimal Production Setup (Docker)
+
+**Quick deployment on a fresh server:**
+
+```bash
+# 1. Install Docker (if not installed)
+# See INSTALLATION.md for detailed instructions
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+# Log out and back in
+
+# 2. Clone repository
+git clone <explorer-repo-url>
+cd explorer
+
+# 3. Create minimal .env.production
+cat > .env.production << EOF
+NODE_ENV=production
+PORT=4175
+EXPLORER_STORES='[{"id":"local","name":"Local Store","baseUrl":"http://localhost:3000/api/explorer"}]'
+EOF
+
+# 4. Build and run
+docker build -t explorer .
+docker run -d \
+  --name explorer \
+  -p 4175:4175 \
+  --env-file .env.production \
+  --restart unless-stopped \
+  explorer
+
+# 5. Verify
+curl http://localhost:4175/health
+```
+
+**That's it!** Explorer is now running. Access it at `http://your-server:4175`
 
 ### Step 1: Clone and Setup
 
