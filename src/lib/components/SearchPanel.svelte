@@ -1,27 +1,16 @@
 <script lang="ts">
-  import type { SearchMode, StoreInfo } from "../types";
+  import type { StoreInfo } from "../types";
   import { createEventDispatcher } from "svelte";
 
-  const modes: { value: SearchMode; label: string; placeholder: string }[] = [
-    { value: "part", label: "Part Hash", placeholder: "Enter part hash" },
-    {
-      value: "transaction",
-      label: "Transaction (ID or Chain Hash)",
-      placeholder: "Enter transaction id or chain hash"
-    }
-  ];
-
-  export let mode: SearchMode = "part";
   export let query = "";
   export let loading = false;
   export let error: string | null = null;
   export let stores: StoreInfo[] = [];
   export let selectedStoreId: string | null = null;
-  export let onSearch: ((payload: { mode: SearchMode; query: string; storeId?: string | null }) => void) | null = null;
+  export let onSearch: ((payload: { query: string; storeId?: string | null }) => void) | null = null;
 
   const dispatch = createEventDispatcher<{
-    search: { mode: SearchMode; query: string; storeId?: string | null };
-    modeChange: { mode: SearchMode };
+    search: { query: string; storeId?: string | null };
   }>();
 
   $: showStoreSelector = stores.length > 1;
@@ -29,32 +18,14 @@
   function handleSubmit(event: Event) {
     event.preventDefault();
     if (loading) return;
-    const payload = { mode, query, storeId: selectedStoreId };
+    const payload = { query, storeId: selectedStoreId };
     onSearch?.(payload);
     dispatch("search", payload);
-  }
-
-  function handleModeChange(event: Event) {
-    const target = event.target as HTMLSelectElement | null;
-    if (!target) return;
-    const next = target.value as SearchMode;
-    mode = next;
-    dispatch("modeChange", { mode });
   }
 </script>
 
 <form class="search-panel" on:submit={handleSubmit}>
   <div class="controls">
-    <label class="field">
-      <span class="field__label">Search type</span>
-      <select bind:value={mode} class="field__input" on:change={handleModeChange} disabled={loading}>
-        {#each modes as item}
-          <option value={item.value}>
-            {item.label}
-          </option>
-        {/each}
-      </select>
-    </label>
     {#if showStoreSelector}
       <label class="field">
         <span class="field__label">Store</span>
@@ -66,12 +37,12 @@
         </select>
       </label>
     {/if}
-    <label class="field">
-      <span class="field__label">Value</span>
+    <label class="field field--search">
+      <span class="field__label">Search</span>
       <input
         class="field__input"
         type="text"
-        placeholder={modes.find((item) => item.value === mode)?.placeholder}
+        placeholder="Enter hash, transaction ID, or chain hash"
         bind:value={query}
         spellcheck="false"
         autocomplete="off"
@@ -107,6 +78,16 @@
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .field--search {
+    grid-column: 1 / -1;
+  }
+
+  @media (min-width: 600px) {
+    .field--search {
+      grid-column: auto;
+    }
   }
 
   .field {

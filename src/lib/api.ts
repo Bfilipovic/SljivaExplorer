@@ -103,6 +103,15 @@ async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
   }
 }
 
+async function requestSafe<T>(path: string, params?: Record<string, string>): Promise<{ success: true; data: T } | { success: false; error: string }> {
+  try {
+    const data = await request<T>(path, params);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Request failed" };
+  }
+}
+
 export async function searchExplorer(
   mode: SearchMode,
   query: string,
@@ -158,5 +167,115 @@ export async function searchExplorer(
       throw new Error(`Unsupported search mode: ${exhaustive}`);
     }
   }
+}
+
+/**
+ * Unified search that automatically tries part hash, chain hash, or transaction ID.
+ * Tries different endpoints in sequence until one succeeds.
+ */
+export async function unifiedSearch(
+  query: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
+
+  const errors: string[] = [];
+
+  // Detect input characteristics
+  const has0xPrefix = sanitized.toLowerCase().startsWith("0x");
+  const without0x = has0xPrefix ? sanitized.slice(2) : sanitized;
+  const with0x = has0xPrefix ? sanitized : `0x${sanitized}`;
+
+  // Build search candidates - try all variations to maximize chances of finding the result
+  const searchCandidates: Array<{ type: string; path: string; desc: string }> = [];
+  const seenPaths = new Set<string>();
+
+  // Helper to add candidate without duplicates
+  const addCandidate = (type: string, path: string, desc: string) => {
+    if (!seenPaths.has(path)) {
+      seenPaths.add(path);
+      searchCandidates.push({ type, path, desc });
+    }
+  };
+
+  // 1. Try part hash (original input)
+  addCandidate("part-hash", `/parts/${encodeURIComponent(sanitized)}`, "part hash");
+
+  // 2. Chain hash variations - try with and without 0x prefix
+  addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(sanitized)}`, "chain hash (as-is)");
+  
+  if (has0xPrefix) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(without0x)}`, "chain hash (without 0x)");
+  }
+  
+  if (!has0xPrefix && /^[0-9a-fA-F]+$/i.test(sanitized)) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(with0x)}`, "chain hash (with 0x)");
+  }
+
+  // 3. Transaction ID - always try
+  addCandidate("transaction-id", `/transactions/id/${encodeURIComponent(sanitized)}`, "transaction ID");
+
+  // Try all candidates
+  for (const candidate of searchCandidates) {
+    try {
+      if (candidate.type === "part-hash") {
+        const result = await requestSafe<PartResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          return {
+            kind: "part",
+            part: result.data.part,
+            nft: result.data.nft ?? null,
+            partialTransactions: result.data.partialTransactions,
+            pagination: result.data.pagination ?? {
+              total: result.data.partialTransactions.length,
+              skip: page * pageSize,
+              limit: pageSize
+            }
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      } else {
+        // transaction searches
+        const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          return {
+            kind: "transaction",
+            transaction: result.data.transaction,
+            partialTransactions: result.data.partialTransactions ?? [],
+            pagination: null
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      errors.push(`${candidate.desc}: ${errorMsg}`);
+    }
+  }
+
+  // All searches failed - provide detailed error message
+  const triedTypes = [...new Set(searchCandidates.map(c => c.desc))].join(", ");
+  const allErrors = errors.length > 0 ? errors.join("; ") : "No specific errors available";
+  throw new Error(
+    `No results found for "${sanitized}". ` +
+    `Tried searching as: ${triedTypes}. ` +
+    `Errors: ${allErrors}`
+  );
 }
 

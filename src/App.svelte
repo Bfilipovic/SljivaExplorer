@@ -2,12 +2,11 @@
   import { onMount } from "svelte";
   import SearchPanel from "./lib/components/SearchPanel.svelte";
   import ResultPanel from "./lib/components/ResultPanel.svelte";
-  import type { ExplorerResult, SearchMode, Pagination, StoreInfo } from "./lib/types";
-  import { searchExplorer, fetchStores } from "./lib/api";
+  import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
+  import { unifiedSearch, fetchStores } from "./lib/api";
 
   const pageSize = 50;
 
-  let mode: SearchMode = "part";
   let query = "";
   let loading = false;
   let error: string | null = null;
@@ -28,7 +27,7 @@
     }
   });
 
-  async function executeSearch(targetMode: SearchMode, value: string, page = 0, storeId: string | null = null) {
+  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
     const input = value.trim();
     if (!input) {
       error = "Please enter a value to search.";
@@ -41,7 +40,7 @@
     error = null;
 
     try {
-      const data = await searchExplorer(targetMode, input, { 
+      const data = await unifiedSearch(input, { 
         page, 
         pageSize,
         storeId: storeId || undefined
@@ -58,18 +57,10 @@
     }
   }
 
-  async function handleSearch(event: CustomEvent<{ mode: SearchMode; query: string; storeId?: string | null }>) {
-    mode = event.detail.mode;
+  async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
     query = event.detail.query;
     selectedStoreId = event.detail.storeId ?? null;
-    await executeSearch(mode, query, 0, selectedStoreId);
-  }
-
-  function handleModeChange(event: CustomEvent<{ mode: SearchMode }>) {
-    mode = event.detail.mode;
-    error = null;
-    pagination = null;
-    currentPage = 0;
+    await executeSearch(query, 0, selectedStoreId);
   }
 
   function totalPages() {
@@ -81,7 +72,7 @@
     if (!pagination) return;
     const pages = totalPages();
     if (page < 0 || page >= pages) return;
-    await executeSearch(mode, query, page, selectedStoreId);
+    await executeSearch(query, page, selectedStoreId);
   }
 
   function toggleTheme() {
@@ -104,10 +95,6 @@
       </p>
     </div>
     <div class="hero__actions">
-      <div class="status">
-        <span class="status__dot"></span>
-        <span>Connected to backend</span>
-      </div>
       <button class="theme-toggle" type="button" on:click={toggleTheme}>
         {theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
       </button>
@@ -115,14 +102,12 @@
   </header>
 
   <SearchPanel
-    bind:mode
     bind:query
     {loading}
     {error}
     {stores}
     bind:selectedStoreId
     on:search={handleSearch}
-    on:modeChange={handleModeChange}
   />
 
   <ResultPanel {result} />
@@ -204,24 +189,6 @@
     align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
-  }
-
-  .status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.9rem;
-    color: var(--text-label);
-    font-weight: 500;
-  }
-
-  .status__dot {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: radial-gradient(circle at center, #34d399 0, #10b981 60%, rgba(16, 185, 129, 0) 100%);
-    box-shadow: 0 0 12px rgba(45, 212, 191, 0.45);
   }
 
   .theme-toggle {
