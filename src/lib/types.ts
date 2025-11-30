@@ -71,6 +71,8 @@ export type ExplorerResult =
   | {
       kind: "transaction";
       transaction: ExplorerTransaction;
+      parts?: ExplorerPart[];
+      nft?: ExplorerNFT | null;
       partialTransactions: PartialTransaction[];
       pagination: Pagination | null;
     };

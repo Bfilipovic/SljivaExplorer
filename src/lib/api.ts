@@ -42,12 +42,13 @@ interface PartResponse {
 
 interface TransactionResponse {
   transaction: ExplorerTransaction;
+  parts?: ExplorerPart[];
   partialTransactions: PartialTransaction[];
   pagination?: {
     total: number;
     skip: number;
     limit: number;
-  };
+  } | null;
 }
 
 async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -79,7 +80,7 @@ async function parseError(response: Response): Promise<string> {
   return `Request failed with status ${response.status}`;
 }
 
-async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
+export async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
   if (!nftId) return null;
   const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
     headers: {
@@ -253,11 +254,19 @@ export async function unifiedSearch(
         // transaction searches
         const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
         if (result.success) {
+          // Fetch NFT metadata if nftId is available
+          let nft = null;
+          if (result.data.transaction.nftId) {
+            nft = await fetchNftMetadata(result.data.transaction.nftId);
+          }
+
           return {
             kind: "transaction",
             transaction: result.data.transaction,
+            parts: result.data.parts ?? [],
+            nft: nft,
             partialTransactions: result.data.partialTransactions ?? [],
-            pagination: null
+            pagination: result.data.pagination ?? null
           };
         }
         const errorMsg = result.error || "Unknown error";

@@ -1,9 +1,36 @@
 <script lang="ts">
-  import type { ExplorerResult } from "../types";
+  import type { ExplorerResult, ExplorerNFT } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
+  import PartsList from "./PartsList.svelte";
+  import { getPartLink, getChainTxLink } from "../utils/storeLinks";
+  import { fetchNftMetadata } from "../api";
 
   export let result: ExplorerResult | null = null;
+
+  let transactionNft: ExplorerNFT | null = null;
+
+  // Fetch NFT metadata for transaction
+  $: if (result && result.kind === "transaction") {
+    if (result.nft) {
+      transactionNft = result.nft;
+    } else if (result.transaction.nftId) {
+      // Fetch NFT metadata using transaction's nftId
+      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
+        transactionNft = nft;
+      });
+    } else if (result.parts && result.parts.length > 0) {
+      // Fallback: use first part's parent_hash
+      const firstPart = result.parts[0];
+      if (firstPart && firstPart.parent_hash) {
+        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
+          transactionNft = nft;
+        });
+      }
+    }
+  } else {
+    transactionNft = null;
+  }
 </script>
 
 {#if !result}
@@ -23,7 +50,16 @@
         <dl>
           <div>
             <dt>Part Hash</dt>
-            <dd>{result.part._id}</dd>
+            <dd>
+              <a
+                href={getPartLink(result.part._id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="part-link"
+              >
+                {result.part._id}
+              </a>
+            </dd>
           </div>
           <div>
             <dt>Part Number</dt>
@@ -99,7 +135,20 @@
           </div>
           <div>
             <dt>Chain Hash</dt>
-            <dd>{result.transaction.chainTx}</dd>
+            <dd>
+              {#if result.transaction.chainTx}
+                <a
+                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.chainTx)}
+                </a>
+              {:else}
+                —
+              {/if}
+            </dd>
           </div>
           <div>
             <dt>Buyer</dt>
@@ -129,13 +178,41 @@
           {/if}
         </dl>
       </div>
-      <div class="card note-card">
-        <h3>Partial Transactions</h3>
-        <p>
-          Partial transfers for this transaction are omitted to keep the Explorer responsive.
-          Use the part hash search to inspect individual partial movements.
-        </p>
-      </div>
+      {#if transactionNft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if transactionNft.imageurl}
+            <figure>
+              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
+              <figcaption>{transactionNft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{transactionNft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{transactionNft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(transactionNft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      {#if result.parts && result.parts.length > 0}
+        <PartsList parts={result.parts} pagination={result.pagination} />
+      {:else}
+        <div class="card note-card">
+          <h3>Parts</h3>
+          <p>No parts found for this transaction.</p>
+        </div>
+      {/if}
     </div>
   </section>
 {/if}
@@ -249,6 +326,18 @@
   .media-card .empty {
     margin: 0;
     color: var(--text-muted);
+  }
+
+  .part-link,
+  .chain-tx-link {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+  }
+
+  .part-link:hover,
+  .chain-tx-link:hover {
+    text-decoration: underline;
   }
 </style>
 

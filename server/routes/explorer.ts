@@ -257,7 +257,13 @@ router.get("/parts/:partHash", async (req, res) => {
 router.get("/transactions/id/:txId", async (req, res) => {
   try {
     const { txId } = req.params;
+    const { skip, limit } = parsePagination(req.query);
     const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
 
     if (storeId) {
       const store = getStoreById(storeId);
@@ -267,9 +273,10 @@ router.get("/transactions/id/:txId", async (req, res) => {
 
       const response = await queryStore<{
         transaction: any;
+        parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(store, `/transactions/id/${encodeURIComponent(txId)}`);
+      }>(store, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
 
       if (response.error) {
         return res.status(502).json({
@@ -283,12 +290,13 @@ router.get("/transactions/id/:txId", async (req, res) => {
         return res.status(404).json({ error: "Transaction not found" });
       }
 
-      const { transaction, partialTransactions, pagination } = response.data;
+      const { transaction, parts = [], partialTransactions, pagination } = response.data;
 
       res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+        parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
         partialTransactions: [],
-        pagination: null
+        pagination: pagination ?? null
       });
     } else {
       const stores = getStores();
@@ -298,9 +306,10 @@ router.get("/transactions/id/:txId", async (req, res) => {
 
       const responses = await queryStores<{
         transaction: any;
+        parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`);
+      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
 
       const results: any[] = [];
       const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
@@ -316,11 +325,12 @@ router.get("/transactions/id/:txId", async (req, res) => {
         }
 
         if (response.data) {
-          const { transaction } = response.data;
+          const { transaction, parts = [], pagination } = response.data;
           results.push({
             transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+            parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
             partialTransactions: [],
-            pagination: null
+            pagination: pagination ?? null
           });
         }
       }
@@ -354,7 +364,13 @@ router.get("/transactions/id/:txId", async (req, res) => {
 router.get("/transactions/chain/:chainTx", async (req, res) => {
   try {
     const { chainTx } = req.params;
+    const { skip, limit } = parsePagination(req.query);
     const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
 
     if (storeId) {
       const store = getStoreById(storeId);
@@ -364,9 +380,10 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
 
       const response = await queryStore<{
         transaction: any;
+        parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(store, `/transactions/chain/${encodeURIComponent(chainTx)}`);
+      }>(store, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
 
       if (response.error) {
         return res.status(502).json({
@@ -380,12 +397,13 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
         return res.status(404).json({ error: "Transaction not found" });
       }
 
-      const { transaction } = response.data;
+      const { transaction, parts = [], partialTransactions, pagination } = response.data;
 
       res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+        parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
         partialTransactions: [],
-        pagination: null
+        pagination: pagination ?? null
       });
     } else {
       const stores = getStores();
@@ -395,9 +413,10 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
 
       const responses = await queryStores<{
         transaction: any;
+        parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(stores, `/transactions/chain/${encodeURIComponent(chainTx)}`);
+      }>(stores, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
 
       const results: any[] = [];
       const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
@@ -413,11 +432,12 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
         }
 
         if (response.data) {
-          const { transaction } = response.data;
+          const { transaction, parts = [], pagination } = response.data;
           results.push({
             transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+            parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
             partialTransactions: [],
-            pagination: null
+            pagination: pagination ?? null
           });
         }
       }

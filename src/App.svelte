@@ -89,9 +89,9 @@
 <main class="app">
   <header class="hero">
     <div class="hero__text">
-      <h1>SljivaStore Explorer</h1>
+      <h1>NFT Explorer</h1>
       <p class="subtitle">
-        Search parts, transactions, and partial transfers across the network.
+        Search transactions across the network.
       </p>
     </div>
     <div class="hero__actions">
