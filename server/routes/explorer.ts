@@ -292,9 +292,26 @@ router.get("/transactions/id/:txId", async (req, res) => {
 
       const { transaction, parts = [], partialTransactions, pagination } = response.data;
 
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (transaction?.nftId) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+        }
+      }
+
       res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
         parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+        nft,
         partialTransactions: [],
         pagination: pagination ?? null
       });
@@ -326,9 +343,30 @@ router.get("/transactions/id/:txId", async (req, res) => {
 
         if (response.data) {
           const { transaction, parts = [], pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (transaction?.nftId) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+            }
+          }
+          
           results.push({
             transaction: enrichTransaction(transaction, response.storeId, response.storeName),
             parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+            nft,
             partialTransactions: [],
             pagination: pagination ?? null
           });
@@ -399,9 +437,26 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
 
       const { transaction, parts = [], partialTransactions, pagination } = response.data;
 
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (transaction?.nftId) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+        }
+      }
+
       res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
         parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+        nft,
         partialTransactions: [],
         pagination: pagination ?? null
       });
@@ -433,9 +488,30 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
 
         if (response.data) {
           const { transaction, parts = [], pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (transaction?.nftId) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+            }
+          }
+          
           results.push({
             transaction: enrichTransaction(transaction, response.storeId, response.storeName),
             parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+            nft,
             partialTransactions: [],
             pagination: pagination ?? null
           });

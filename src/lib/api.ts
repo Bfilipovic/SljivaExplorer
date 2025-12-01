@@ -43,6 +43,7 @@ interface PartResponse {
 interface TransactionResponse {
   transaction: ExplorerTransaction;
   parts?: ExplorerPart[];
+  nft?: ExplorerNFT | null;
   partialTransactions: PartialTransaction[];
   pagination?: {
     total: number;
@@ -254,9 +255,9 @@ export async function unifiedSearch(
         // transaction searches
         const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
         if (result.success) {
-          // Fetch NFT metadata if nftId is available
-          let nft = null;
-          if (result.data.transaction.nftId) {
+          // Use NFT metadata from server response, or fetch if not provided
+          let nft = result.data.nft ?? null;
+          if (!nft && result.data.transaction.nftId) {
             nft = await fetchNftMetadata(result.data.transaction.nftId);
           }
 
