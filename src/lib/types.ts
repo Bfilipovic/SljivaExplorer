@@ -46,6 +46,7 @@ export interface PartialTransaction {
 
 export interface ExplorerTransaction {
   _id: string;
+  type: "TRANSACTION" | "GIFT" | "MINT";
   listingId: string;
   reservationId: string;
   buyer: string;

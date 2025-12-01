@@ -134,6 +134,10 @@
             <dd>{result.transaction._id}</dd>
           </div>
           <div>
+            <dt>Type</dt>
+            <dd>{result.transaction.type || "TRANSACTION"}</dd>
+          </div>
+          <div>
             <dt>Chain Hash</dt>
             <dd>
               {#if result.transaction.chainTx}
