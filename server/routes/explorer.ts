@@ -10,6 +10,98 @@ import { queryStore, queryStores } from "../utils/storeClient.js";
 
 const router = express.Router();
 
+// In-memory cache for store icons
+interface IconCacheEntry {
+  data: Buffer;
+  contentType: string;
+  timestamp: number;
+}
+
+const iconCache = new Map<string, IconCacheEntry>();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * GET /api/explorer/icon/:storeId
+ * 
+ * Proxy and cache store icons to avoid CORS issues.
+ */
+router.get("/icon/:storeId", async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const store = getStoreById(storeId);
+    
+    if (!store) {
+      return res.status(404).json({ error: "Store not found" });
+    }
+
+    if (!store.icon) {
+      return res.status(404).json({ error: "Store has no icon configured" });
+    }
+
+    // Check cache first
+    const cacheKey = storeId;
+    const cached = iconCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      res.setHeader("Content-Type", cached.contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400"); // 24 hours
+      return res.send(cached.data);
+    }
+
+    // Fetch icon from store
+    try {
+      console.log(`[Explorer API] Fetching icon for store ${storeId} from: ${store.icon}`);
+      const iconResponse = await fetch(store.icon, {
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+
+      console.log(`[Explorer API] Icon fetch response status: ${iconResponse.status} for ${store.icon}`);
+      if (!iconResponse.ok) {
+        const errorText = await iconResponse.text().catch(() => 'Unable to read error response');
+        throw new Error(`Failed to fetch icon: ${iconResponse.status} - ${errorText}`);
+      }
+
+      const contentType = iconResponse.headers.get("content-type") || "image/png";
+      const buffer = Buffer.from(await iconResponse.arrayBuffer());
+
+      // Cache the icon
+      iconCache.set(cacheKey, {
+        data: buffer,
+        contentType,
+        timestamp: Date.now(),
+      });
+
+      // Set headers
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400"); // 24 hours
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      res.send(buffer);
+    } catch (fetchError) {
+      console.error(`[Explorer API] Failed to fetch icon for store ${storeId} from ${store.icon}:`, fetchError);
+      console.error(`[Explorer API] Fetch error details:`, fetchError instanceof Error ? fetchError.message : String(fetchError));
+      
+      // If we have a stale cache, use it
+      if (cached) {
+        console.log(`[Explorer API] Using stale cached icon for store ${storeId}`);
+        res.setHeader("Content-Type", cached.contentType);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.send(cached.data);
+      }
+
+      res.status(502).json({ 
+        error: "Failed to fetch store icon",
+        details: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        iconUrl: store.icon
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /icon/:storeId:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
 /**
  * GET /api/explorer/stores
  * 
@@ -19,11 +111,66 @@ router.get("/stores", (req, res) => {
   try {
     const stores = getStores();
     res.json(
-      stores.map(store => ({
-        id: store.id,
-        name: store.name,
-        icon: store.icon || null
-      }))
+      stores.map(store => {
+        // Extract website URL from baseUrl
+        // e.g., https://store.example.com/api/explorer -> www.store.example.com
+        let website: string | undefined;
+        let icon = store.icon;
+        
+        try {
+          const url = new URL(store.baseUrl);
+          const hostname = url.hostname;
+          
+          // For localhost, show as-is (e.g., localhost:3000)
+          if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            website = url.port ? `${hostname}:${url.port}` : hostname;
+            
+            // Ensure localhost stores have a default icon if not set
+            if (!icon) {
+              const frontendPort = process.env.FRONTEND_PORT || '5173';
+              icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+            }
+          } else {
+            // For other domains, add www prefix
+            website = hostname.startsWith('www.') 
+              ? hostname 
+              : `www.${hostname}`;
+          }
+        } catch {
+          // If URL parsing fails, try regex fallback
+          const match = store.baseUrl.match(/^https?:\/\/([^\/]+)/);
+          if (match) {
+            const fullHost = match[1];
+            const [hostname, port] = fullHost.split(':');
+            
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+              website = port ? `${hostname}:${port}` : hostname;
+              
+              // Ensure localhost stores have a default icon if not set
+              if (!icon) {
+                const frontendPort = process.env.FRONTEND_PORT || '5173';
+                icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+              }
+            } else {
+              website = hostname.startsWith('www.') ? hostname : `www.${hostname}`;
+            }
+          }
+        }
+        
+        // Return proxied icon URL if icon exists
+        let iconUrl: string | null = null;
+        if (icon) {
+          iconUrl = `/api/explorer/icon/${store.id}`;
+        }
+        
+        return {
+          id: store.id,
+          name: store.name,
+          baseUrl: store.baseUrl,
+          website: website,
+          icon: iconUrl
+        };
+      })
     );
   } catch (err) {
     console.error("[Explorer API] Error in /stores:", err);

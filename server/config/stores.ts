@@ -51,14 +51,30 @@ function parseStoresFromEnv(): StoreConfig[] {
         continue;
       }
 
+      const baseUrl = String(item.baseUrl).replace(/\/$/, ""); // Remove trailing slash
+      
+      // Default icon for localhost stores if not specified
+      let icon = item.icon ? String(item.icon) : undefined;
+      if (!icon) {
+        try {
+          const url = new URL(baseUrl);
+          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+            const frontendPort = process.env.FRONTEND_PORT || '5173';
+            icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+          }
+        } catch {
+          // If URL parsing fails, skip default icon
+        }
+      }
+
       stores.push({
         id: String(item.id),
         name: String(item.name),
-        baseUrl: String(item.baseUrl).replace(/\/$/, ""), // Remove trailing slash
+        baseUrl: baseUrl,
         publicKey: item.publicKey ? String(item.publicKey) : undefined,
         description: item.description ? String(item.description) : undefined,
         enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
-        icon: item.icon ? String(item.icon) : undefined
+        icon: icon
       });
     }
 
@@ -79,6 +95,7 @@ function parseStoresFromEnv(): StoreConfig[] {
  */
 function getDefaultStores(): StoreConfig[] {
   const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
+  const frontendPort = process.env.FRONTEND_PORT || "5173";
   return [
     {
       id: "local",
@@ -86,7 +103,7 @@ function getDefaultStores(): StoreConfig[] {
       baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
       description: "Default local development store",
       enabled: true,
-      icon: `http://localhost:${mainStorePort}/sljiva_icon.png` // Default icon for local store
+      icon: `http://localhost:${frontendPort}/sljiva_icon.png` // Icon is served from frontend static files
     }
   ];
 }

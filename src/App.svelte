@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import SearchPanel from "./lib/components/SearchPanel.svelte";
   import ResultPanel from "./lib/components/ResultPanel.svelte";
+  import NetworkPage from "./lib/components/NetworkPage.svelte";
   import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
   import { unifiedSearch, fetchStores } from "./lib/api";
 
@@ -198,13 +199,7 @@
 
     <ResultPanel {result} />
   {:else if activeSection === 'network'}
-    <div class="content-page">
-      <h2>Our Network</h2>
-      <div class="content-section">
-        <p>Explore the decentralized network of SljivaStore instances connected to this explorer.</p>
-        <p>Placeholder content: This page will display a comprehensive list of all connected SljivaStore instances, including their operational status, geographical location, transaction statistics, and uptime metrics. Users will be able to see real-time information about each store's health and activity.</p>
-      </div>
-    </div>
+    <NetworkPage />
   {:else if activeSection === 'terms'}
     <div class="content-page">
       <h2>Terms of Service</h2>

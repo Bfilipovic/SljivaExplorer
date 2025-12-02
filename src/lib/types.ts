@@ -3,6 +3,9 @@ export type SearchMode = "part" | "transaction";
 export interface StoreInfo {
   id: string;
   name: string;
+  baseUrl: string;
+  website?: string;
+  icon?: string | null;
 }
 
 export interface ExplorerPart {

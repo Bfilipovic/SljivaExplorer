@@ -29,6 +29,34 @@ export async function fetchStores(): Promise<StoreInfo[]> {
   return (await response.json()) as StoreInfo[];
 }
 
+/**
+ * Fetch last transaction for a specific store.
+ */
+export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
+  transaction: ExplorerTransaction;
+  error?: string;
+} | null> {
+  try {
+    const response = await fetch(`${storeBaseUrl}/last-transaction`, {
+      headers: {
+        Accept: "application/json"
+      },
+      signal: AbortSignal.timeout(5000) // 5 second timeout
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return {
+      transaction: data.transaction
+    };
+  } catch (err) {
+    return null; // Store is offline or error occurred
+  }
+}
+
 interface PartResponse {
   part: ExplorerPart;
   nft?: ExplorerNFT | null;
