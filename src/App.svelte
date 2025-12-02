@@ -3,6 +3,7 @@
   import SearchPanel from "./lib/components/SearchPanel.svelte";
   import ResultPanel from "./lib/components/ResultPanel.svelte";
   import NetworkPage from "./lib/components/NetworkPage.svelte";
+  import VerificationPage from "./lib/components/VerificationPage.svelte";
   import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
   import { unifiedSearch, fetchStores } from "./lib/api";
 
@@ -198,7 +199,10 @@
     </div>
 
     {#if result}
-      <ResultPanel {result} />
+      <ResultPanel {result} on:navigateToVerification={() => {
+        setActiveSection('verification');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }} />
     {/if}
   {:else if activeSection === 'network'}
     <NetworkPage />
@@ -223,7 +227,7 @@
         </p>
       </div>
       <div class="content-body">
-        <p>This page will explain our comprehensive verification model, including how transactions are cryptographically verified using hash-based IDs, how each transaction is permanently stored on Arweave with links to previous transactions, and how users can independently verify transaction integrity by recalculating hashes. The page will also cover our sequential transaction numbering system and the complete transaction history reconstruction process.</p>
+        <VerificationPage />
       </div>
     </div>
   {/if}

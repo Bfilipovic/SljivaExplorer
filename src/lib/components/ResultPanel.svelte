@@ -8,7 +8,11 @@
   import { fetchNftMetadata } from "../api";
   import { verifyTransaction } from "../utils/verification";
 
+  import { createEventDispatcher } from "svelte";
+  
   export let result: ExplorerResult | null = null;
+  
+  const dispatch = createEventDispatcher();
 
   let transactionNft: ExplorerNFT | null = null;
   let verificationModalOpen = false;
@@ -183,23 +187,33 @@
         <div class="card-header">
           <h3>Summary</h3>
           {#if result.kind === "transaction"}
-            <button
-              class="verify-button"
-              class:verified={verificationState === "verified"}
-              class:failed={verificationState === "failed"}
-              disabled={verificationState === "verifying"}
-              on:click={handleVerify}
-            >
-              {#if verificationState === "verified"}
-                ✓ Transaction Verified
-              {:else if verificationState === "failed"}
-                ✗ Verification Failed
-              {:else if verificationState === "verifying"}
-                Verifying...
-              {:else}
-                Verify
+            <div class="button-group">
+              <button
+                class="verify-button"
+                class:verified={verificationState === "verified"}
+                class:failed={verificationState === "failed"}
+                disabled={verificationState === "verifying"}
+                on:click={handleVerify}
+              >
+                {#if verificationState === "verified"}
+                  ✓ Transaction Verified
+                {:else if verificationState === "failed"}
+                  ✗ Verification Failed
+                {:else if verificationState === "verifying"}
+                  Verifying...
+                {:else}
+                  Verify
+                {/if}
+              </button>
+              {#if verificationState === "verified" || verificationState === "failed"}
+                <button
+                  class="learn-more-button"
+                  on:click={() => dispatch("navigateToVerification")}
+                >
+                  Learn More
+                </button>
               {/if}
-            </button>
+            </div>
           {/if}
         </div>
         <dl>
@@ -383,6 +397,13 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 1rem;
+    gap: 0.75rem;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
   }
 
   .card h3 {
@@ -420,6 +441,41 @@
   .verify-button.failed {
     background: #ef4444;
     border-color: #ef4444;
+  }
+
+  .learn-more-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .learn-more-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  @media (max-width: 640px) {
+    .card-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .button-group {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    .verify-button,
+    .learn-more-button {
+      width: 100%;
+    }
   }
 
   dl {
