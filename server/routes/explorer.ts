@@ -21,7 +21,8 @@ router.get("/stores", (req, res) => {
     res.json(
       stores.map(store => ({
         id: store.id,
-        name: store.name
+        name: store.name,
+        icon: store.icon || null
       }))
     );
   } catch (err) {

@@ -12,6 +12,7 @@ export interface StoreConfig {
   publicKey?: string;
   description?: string;
   enabled?: boolean;
+  icon?: string; // URL or path to store icon
 }
 
 /**
@@ -56,7 +57,8 @@ function parseStoresFromEnv(): StoreConfig[] {
         baseUrl: String(item.baseUrl).replace(/\/$/, ""), // Remove trailing slash
         publicKey: item.publicKey ? String(item.publicKey) : undefined,
         description: item.description ? String(item.description) : undefined,
-        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true
+        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
+        icon: item.icon ? String(item.icon) : undefined
       });
     }
 
@@ -83,7 +85,8 @@ function getDefaultStores(): StoreConfig[] {
       name: "Local SljivaStore",
       baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
       description: "Default local development store",
-      enabled: true
+      enabled: true,
+      icon: `http://localhost:${mainStorePort}/sljiva_icon.png` // Default icon for local store
     }
   ];
 }
