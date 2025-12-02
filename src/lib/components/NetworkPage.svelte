@@ -108,10 +108,10 @@
   }
 </script>
 
-<div class="network-page">
-  <div class="network-header">
+<div class="content-page">
+  <div class="content-header">
     <h2>Our Network</h2>
-    <p class="network-description">
+    <p class="content-description">
       Explore all SljivaStore instances connected to this explorer. Each store operates independently
       and maintains its own transaction history.
     </p>
@@ -227,31 +227,7 @@
 </div>
 
 <style>
-  .network-page {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem clamp(1rem, 5vw, 2rem);
-  }
-
-  .network-header {
-    margin-bottom: 3rem;
-  }
-
-  .network-header h2 {
-    margin: 0 0 1rem;
-    font-size: clamp(2rem, 3vw, 2.5rem);
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: var(--text-primary);
-  }
-
-  .network-description {
-    margin: 0;
-    color: var(--text-secondary);
-    line-height: 1.7;
-    font-size: 1.05rem;
-    max-width: 700px;
-  }
+  /* Content page styles are now global in App.svelte */
 
   .loading-state,
   .error-state,

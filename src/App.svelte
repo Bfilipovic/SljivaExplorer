@@ -197,23 +197,33 @@
       />
     </div>
 
-    <ResultPanel {result} />
+    {#if result}
+      <ResultPanel {result} />
+    {/if}
   {:else if activeSection === 'network'}
     <NetworkPage />
   {:else if activeSection === 'terms'}
     <div class="content-page">
-      <h2>Terms of Service</h2>
-      <div class="content-section">
-        <p>Please read these terms carefully before using the NFT Explorer.</p>
-        <p>Placeholder content: This page will contain the complete terms of service, including usage guidelines, acceptable use policies, limitations of liability, privacy policies, and service agreements. Users must agree to these terms to use the explorer.</p>
+      <div class="content-header">
+        <h2>Terms of Service</h2>
+        <p class="content-description">
+          Please read these terms carefully before using the NFT Explorer.
+        </p>
+      </div>
+      <div class="content-body">
+        <p>This page will contain the complete terms of service, including usage guidelines, acceptable use policies, limitations of liability, privacy policies, and service agreements. Users must agree to these terms to use the explorer.</p>
       </div>
     </div>
   {:else if activeSection === 'verification'}
     <div class="content-page">
-      <h2>Verification & Arweave</h2>
-      <div class="content-section">
-        <p>Learn how we ensure transaction integrity through cryptographic verification and permanent storage on Arweave.</p>
-        <p>Placeholder content: This page will explain our comprehensive verification model, including how transactions are cryptographically verified using hash-based IDs, how each transaction is permanently stored on Arweave with links to previous transactions, and how users can independently verify transaction integrity by recalculating hashes. The page will also cover our sequential transaction numbering system and the complete transaction history reconstruction process.</p>
+      <div class="content-header">
+        <h2>Verification & Arweave</h2>
+        <p class="content-description">
+          Learn how we ensure transaction integrity through cryptographic verification and permanent storage on Arweave.
+        </p>
+      </div>
+      <div class="content-body">
+        <p>This page will explain our comprehensive verification model, including how transactions are cryptographically verified using hash-based IDs, how each transaction is permanently stored on Arweave with links to previous transactions, and how users can independently verify transaction integrity by recalculating hashes. The page will also cover our sequential transaction numbering system and the complete transaction history reconstruction process.</p>
       </div>
     </div>
   {/if}
@@ -485,35 +495,49 @@
     scroll-margin-top: 100px;
   }
 
-  .content-page {
-    background: var(--card-bg);
-    border-radius: 1.25rem;
-    padding: 3rem clamp(2rem, 5vw, 4rem);
-    border: 1px solid var(--card-border);
-    box-shadow: 0 24px 55px var(--card-shadow);
-    max-width: 900px;
-    margin: 0 auto;
+  :global(.content-page) {
+    max-width: 1200px;
+    margin: 0;
+    padding: 0;
+    width: 100%;
   }
 
-  .content-page h2 {
-    margin: 0 0 2rem;
+  :global(.content-header) {
+    margin-bottom: 3rem;
+    text-align: left;
+    width: 100%;
+  }
+
+  :global(.content-header h2) {
+    margin: 0 0 1rem;
     font-size: clamp(2rem, 3vw, 2.5rem);
     font-weight: 700;
     letter-spacing: -0.01em;
     color: var(--text-primary);
+    text-align: left;
+    width: 100%;
   }
 
-  .content-section {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
-  .content-page p {
+  :global(.content-description) {
     margin: 0;
     color: var(--text-secondary);
     line-height: 1.7;
     font-size: 1.05rem;
+    max-width: 700px;
+  }
+
+  .content-body {
+    color: var(--text-secondary);
+    line-height: 1.7;
+    font-size: 1.05rem;
+  }
+
+  .content-body p {
+    margin: 0 0 1.5rem;
+  }
+
+  .content-body p:last-child {
+    margin-bottom: 0;
   }
 
   .pager {

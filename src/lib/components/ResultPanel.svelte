@@ -3,12 +3,19 @@
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
   import PartsList from "./PartsList.svelte";
+  import VerificationModal from "./VerificationModal.svelte";
   import { getPartLink, getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
   import { fetchNftMetadata } from "../api";
+  import { verifyTransaction } from "../utils/verification";
 
   export let result: ExplorerResult | null = null;
 
   let transactionNft: ExplorerNFT | null = null;
+  let verificationModalOpen = false;
+  let verificationStep = "";
+  let verificationState: "idle" | "verifying" | "verified" | "failed" = "idle";
+  let verificationError: string | null = null;
+  let verificationChecks: any[] = [];
 
   // Fetch NFT metadata for transaction
   $: if (result && result.kind === "transaction") {
@@ -31,14 +38,60 @@
   } else {
     transactionNft = null;
   }
+
+  async function handleVerify() {
+    if (!result || result.kind !== "transaction" || verificationState === "verifying") {
+      return;
+    }
+
+    // If already verified, just show the results
+    if (verificationState === "verified" || verificationState === "failed") {
+      verificationModalOpen = true;
+      return;
+    }
+
+    verificationModalOpen = true;
+    verificationState = "verifying";
+    verificationError = null;
+    verificationStep = "";
+    verificationChecks = [];
+
+    try {
+      const updateStep = (step: string) => {
+        verificationStep = step;
+      };
+
+      const verificationResult = await verifyTransaction(result.transaction, updateStep);
+
+      // Store checks for display
+      verificationChecks = verificationResult.checks || [];
+
+      if (verificationResult.verified) {
+        verificationState = "verified";
+        verificationStep = "";
+        verificationError = null;
+      } else {
+        verificationState = "failed";
+        verificationStep = "";
+        verificationError = verificationResult.errors.length > 0 
+          ? verificationResult.errors.join("; ")
+          : "Unknown verification error";
+      }
+    } catch (error) {
+      verificationState = "failed";
+      verificationStep = "";
+      verificationError = error instanceof Error ? error.message : String(error);
+      verificationChecks = [{
+        name: "Verification Process",
+        passed: false,
+        message: error instanceof Error ? error.message : String(error)
+      }];
+    }
+  }
 </script>
 
-{#if !result}
-  <section class="empty-state">
-    <h2>Explorer</h2>
-    <p>Enter a part hash or transaction identifier to explore the SljivaStore network.</p>
-  </section>
-{:else if result.kind === "part"}
+{#if result}
+  {#if result.kind === "part"}
   <section class="result-section">
     <header>
       <h2>Part</h2>
@@ -127,7 +180,28 @@
     </header>
     <div class="grid">
       <div class="card">
-        <h3>Summary</h3>
+        <div class="card-header">
+          <h3>Summary</h3>
+          {#if result.kind === "transaction"}
+            <button
+              class="verify-button"
+              class:verified={verificationState === "verified"}
+              class:failed={verificationState === "failed"}
+              disabled={verificationState === "verifying"}
+              on:click={handleVerify}
+            >
+              {#if verificationState === "verified"}
+                ✓ Transaction Verified
+              {:else if verificationState === "failed"}
+                ✗ Verification Failed
+              {:else if verificationState === "verifying"}
+                Verifying...
+              {:else}
+                Verify
+              {/if}
+            </button>
+          {/if}
+        </div>
         <dl>
           <div>
             <dt>Transaction ID</dt>
@@ -242,22 +316,20 @@
       {/if}
     </div>
   </section>
+  {/if}
 {/if}
 
+<VerificationModal
+  isOpen={verificationModalOpen}
+  currentStep={verificationStep}
+  checks={verificationChecks}
+  isVerifying={verificationState === "verifying"}
+  on:close={() => {
+    verificationModalOpen = false;
+  }}
+/>
+
 <style>
-  .empty-state {
-    padding: 2rem;
-    border-radius: 1rem;
-    border: 1px dashed var(--border-muted);
-    text-align: center;
-    color: var(--text-muted);
-  }
-
-  .empty-state h2 {
-    margin-bottom: 0.5rem;
-    font-size: 1.75rem;
-  }
-
   .result-section {
     display: grid;
     gap: 1.5rem;
@@ -306,10 +378,48 @@
     line-height: 1.5;
   }
 
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
   .card h3 {
-    margin: 0 0 1rem;
+    margin: 0;
     font-size: 1.1rem;
     color: var(--text-primary);
+  }
+
+  .verify-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease, background 0.2s ease;
+  }
+
+  .verify-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .verify-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .verify-button.verified {
+    background: #10b981;
+    border-color: #10b981;
+  }
+
+  .verify-button.failed {
+    background: #ef4444;
+    border-color: #ef4444;
   }
 
   dl {
