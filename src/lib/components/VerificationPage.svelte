@@ -342,8 +342,104 @@ Transaction #1  → Previous: null (first transaction)`}</pre>
     text-decoration: none;
   }
 
+  a {
+    word-break: break-word;
+  }
+
   a:hover {
     text-decoration: underline;
+  }
+
+  /* Mobile responsive styles */
+  @media (max-width: 768px) {
+    .verification-content {
+      gap: 2rem;
+      max-width: 100%;
+      width: 100%;
+      overflow-x: hidden;
+    }
+
+    h3 {
+      font-size: 1.5rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    h4 {
+      font-size: 1.1rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    p {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      hyphens: auto;
+    }
+
+    ul, ol {
+      padding-left: 1.25rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    li {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      margin: 0.75rem 0;
+    }
+
+    code {
+      word-break: break-all;
+      overflow-wrap: break-word;
+      font-size: 0.85em;
+      display: inline-block;
+      max-width: 100%;
+    }
+
+    .code-block {
+      padding: 0.75rem;
+      margin: 0.75rem 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .code-block pre {
+      font-size: 0.75rem;
+      white-space: pre;
+      overflow-x: auto;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
+
+    .check-item {
+      padding: 0.75rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    .check-item strong {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    .check-item p {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    .highlight-box {
+      padding: 1rem;
+      margin: 1rem 0;
+    }
+
+    .highlight-box p {
+      font-size: 1rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
   }
 </style>
 

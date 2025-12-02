@@ -544,6 +544,21 @@
     margin-bottom: 0;
   }
 
+  @media (max-width: 768px) {
+    .content-body {
+      overflow-x: hidden;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    :global(.content-page) {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+  }
+
   .pager {
     display: flex;
     align-items: center;
