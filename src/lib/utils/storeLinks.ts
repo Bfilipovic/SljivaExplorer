@@ -34,3 +34,13 @@ export function getChainTxLink(chainTx: string, currency?: string): string {
   return `${base}${chainTx}`;
 }
 
+/**
+ * Generate a link to an Arweave transaction explorer
+ */
+export function getArweaveTxLink(arweaveTxId: string): string {
+  if (!arweaveTxId) return '#';
+  // Use viewblock.io Arweave explorer for better UX (can be configured via env)
+  const explorer = import.meta.env.VITE_ARWEAVE_EXPLORER || 'https://viewblock.io/arweave/tx';
+  return `${explorer.replace(/\/$/, '')}/${arweaveTxId}`;
+}
+

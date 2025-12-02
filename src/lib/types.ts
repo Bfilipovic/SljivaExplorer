@@ -47,6 +47,7 @@ export interface PartialTransaction {
 export interface ExplorerTransaction {
   _id: string;
   type: "TRANSACTION" | "GIFT" | "MINT";
+  transaction_number?: number;
   listingId: string;
   reservationId: string;
   buyer: string;
@@ -56,6 +57,7 @@ export interface ExplorerTransaction {
   chainTx: string;
   currency: string;
   amount: string;
+  arweaveTxId?: string;
   timestamp: string;
   storeId?: string;
   storeName?: string;

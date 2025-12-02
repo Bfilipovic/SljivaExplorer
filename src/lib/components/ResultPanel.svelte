@@ -3,7 +3,7 @@
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
   import PartsList from "./PartsList.svelte";
-  import { getPartLink, getChainTxLink } from "../utils/storeLinks";
+  import { getPartLink, getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
   import { fetchNftMetadata } from "../api";
 
   export let result: ExplorerResult | null = null;
@@ -133,6 +133,12 @@
             <dt>Transaction ID</dt>
             <dd>{result.transaction._id}</dd>
           </div>
+          {#if result.transaction.transaction_number !== undefined}
+            <div>
+              <dt>Transaction Number</dt>
+              <dd>{result.transaction.transaction_number}</dd>
+            </div>
+          {/if}
           <div>
             <dt>Type</dt>
             <dd>{result.transaction.type || "TRANSACTION"}</dd>
@@ -151,6 +157,23 @@
                 </a>
               {:else}
                 —
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Arweave Transaction</dt>
+            <dd>
+              {#if result.transaction.arweaveTxId}
+                <a
+                  href={getArweaveTxLink(result.transaction.arweaveTxId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.arweaveTxId)}
+                </a>
+              {:else}
+                <span class="text-muted">Not uploaded</span>
               {/if}
             </dd>
           </div>

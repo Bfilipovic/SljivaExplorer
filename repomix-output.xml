@@ -42,19 +42,37 @@ The content is organized as follows:
 <directory_structure>
 docs/
   backend-api-reference.md
+  DEPLOYMENT.md
+  INSTALLATION.md
   integration-notes.md
   README.md
   running.md
   session-playbook.md
   sljivastore-bridge.md
+scripts/
+  add-store.sh
+  discover-store.sh
+  rebuild-and-restart.sh
+server/
+  config/
+    stores.ts
+  routes/
+    explorer.ts
+  utils/
+    storeClient.ts
+  index.ts
+  README.md
+  tsconfig.json
 src/
   lib/
     components/
       PartialTable.svelte
+      PartsList.svelte
       ResultPanel.svelte
       SearchPanel.svelte
     utils/
       format.ts
+      storeLinks.ts
     api.ts
     types.ts
   app.css
@@ -66,11 +84,14 @@ tests/
   SearchPanel.test.ts
 .cursorrules
 .gitignore
+ADD_YOUR_STORE.md
 Dockerfile
 index.html
+LOCAL_SETUP.md
 orchestrate
 package.json
 README.md
+RESTART_INSTRUCTIONS.md
 svelte.config.js
 tsconfig.json
 vite.config.ts
@@ -298,6 +319,1834 @@ The app will be available at `http://localhost:4175`.
 - Avoid mutating backend state; Explorer is read-only.
 </file>
 
+<file path="scripts/rebuild-and-restart.sh">
+#!/bin/bash
+# Script to rebuild and restart the Explorer container
+# Works whether the container is already running or not
+
+set -e
+
+echo "🔄 Rebuilding and restarting Explorer..."
+
+# Navigate to Explorer directory
+cd "$(dirname "$0")/.." || exit 1
+
+# Pull latest code
+echo "📥 Pulling latest code..."
+git pull origin main || echo "⚠️  Git pull failed or not a git repo, continuing..."
+
+# Stop container if it exists (ignore errors if it doesn't)
+echo "🛑 Stopping existing container (if running)..."
+sudo docker stop explorer 2>/dev/null || echo "   Container not running, skipping stop"
+
+# Remove container if it exists (ignore errors if it doesn't)
+echo "🗑️  Removing existing container (if exists)..."
+sudo docker rm explorer 2>/dev/null || echo "   Container doesn't exist, skipping remove"
+
+# Build the Docker image
+echo "🔨 Building Docker image..."
+sudo docker build -t explorer .
+
+# Start the new container
+echo "🚀 Starting new container..."
+sudo docker run -d \
+  --name explorer \
+  -p 4175:4175 \
+  --env-file .env.production \
+  --restart unless-stopped \
+  explorer
+
+# Wait a moment for container to start
+sleep 2
+
+# Show logs
+echo ""
+echo "📋 Recent logs:"
+echo "=========================================="
+sudo docker logs explorer | tail -20
+
+echo ""
+echo "✅ Explorer rebuilt and restarted!"
+echo ""
+echo "To view full logs: sudo docker logs explorer"
+echo "To follow logs:    sudo docker logs -f explorer"
+</file>
+
+<file path="server/config/stores.ts">
+/**
+ * Store Configuration
+ * 
+ * Defines the structure and management of multiple SljivaStore-compatible stores
+ * that the Explorer can query.
+ */
+
+export interface StoreConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  publicKey?: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+/**
+ * Parse store configurations from environment variable.
+ * 
+ * Expected format: JSON array of store objects:
+ * [
+ *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
+ *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
+ * ]
+ */
+function parseStoresFromEnv(): StoreConfig[] {
+  const storesEnv = process.env.EXPLORER_STORES;
+  
+  if (!storesEnv) {
+    return getDefaultStores();
+  }
+
+  try {
+    const parsed = JSON.parse(storesEnv);
+    
+    if (!Array.isArray(parsed)) {
+      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
+      return getDefaultStores();
+    }
+
+    const stores: StoreConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) {
+        console.warn("[Stores Config] Skipping invalid store entry:", item);
+        continue;
+      }
+
+      if (!item.id || !item.name || !item.baseUrl) {
+        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
+        continue;
+      }
+
+      stores.push({
+        id: String(item.id),
+        name: String(item.name),
+        baseUrl: String(item.baseUrl).replace(/\/$/, ""), // Remove trailing slash
+        publicKey: item.publicKey ? String(item.publicKey) : undefined,
+        description: item.description ? String(item.description) : undefined,
+        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true
+      });
+    }
+
+    if (stores.length === 0) {
+      console.warn("[Stores Config] No valid stores found, using defaults");
+      return getDefaultStores();
+    }
+
+    return stores;
+  } catch (error) {
+    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
+    return getDefaultStores();
+  }
+}
+
+/**
+ * Get default store configuration for local development.
+ */
+function getDefaultStores(): StoreConfig[] {
+  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
+  return [
+    {
+      id: "local",
+      name: "Local SljivaStore",
+      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
+      description: "Default local development store",
+      enabled: true
+    }
+  ];
+}
+
+// Load and cache store configurations
+let cachedStores: StoreConfig[] | null = null;
+
+/**
+ * Get all configured stores.
+ * Stores are loaded once on first call and cached.
+ */
+export function getStores(): StoreConfig[] {
+  if (cachedStores === null) {
+    cachedStores = parseStoresFromEnv();
+  }
+  return cachedStores.filter(store => store.enabled !== false);
+}
+
+/**
+ * Get a store by its ID.
+ * @param id Store identifier
+ * @returns Store configuration or undefined if not found
+ */
+export function getStoreById(id: string): StoreConfig | undefined {
+  const stores = getStores();
+  return stores.find(store => store.id === id);
+}
+
+/**
+ * Initialize store configuration (call on server startup).
+ * This will parse and validate stores, logging the results.
+ */
+export function initializeStores(): void {
+  const stores = getStores();
+  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
+  stores.forEach(store => {
+    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
+  });
+}
+</file>
+
+<file path="server/utils/storeClient.ts">
+/**
+ * Store Client Utilities
+ * 
+ * Handles HTTP requests to individual SljivaStore backends with timeout and error handling.
+ */
+
+import type { StoreConfig } from "../config/stores.js";
+
+const DEFAULT_TIMEOUT = 10000; // 10 seconds
+
+interface StoreRequestOptions {
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
+interface StoreResponse<T> {
+  data: T | null;
+  error: string | null;
+  storeId: string;
+  storeName: string;
+}
+
+/**
+ * Make a request to a specific store with timeout and error handling.
+ */
+async function requestStore<T>(
+  store: StoreConfig,
+  path: string,
+  queryParams?: Record<string, string>,
+  options: StoreRequestOptions = {}
+): Promise<StoreResponse<T>> {
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  // Merge with any provided signal
+  if (options.signal) {
+    options.signal.addEventListener("abort", () => controller.abort());
+  }
+
+  try {
+    const query = queryParams ? `?${new URLSearchParams(queryParams).toString()}` : "";
+    const url = `${store.baseUrl}${path}${query}`;
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errorMessage = `Store ${store.id} returned ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (typeof errorData?.error === "string") {
+          errorMessage = errorData.error;
+        }
+      } catch {
+        // Ignore JSON parse errors
+      }
+      return {
+        data: null,
+        error: errorMessage,
+        storeId: store.id,
+        storeName: store.name
+      };
+    }
+
+    const data = (await response.json()) as T;
+    return {
+      data,
+      error: null,
+      storeId: store.id,
+      storeName: store.name
+    };
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof Error && error.name === "AbortError") {
+      return {
+        data: null,
+        error: `Request to ${store.id} timed out after ${timeout}ms`,
+        storeId: store.id,
+        storeName: store.name
+      };
+    }
+
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Unknown error",
+      storeId: store.id,
+      storeName: store.name
+    };
+  }
+}
+
+/**
+ * Query multiple stores in parallel.
+ */
+export async function queryStores<T>(
+  stores: StoreConfig[],
+  path: string,
+  queryParams?: Record<string, string>,
+  options: StoreRequestOptions = {}
+): Promise<StoreResponse<T>[]> {
+  const promises = stores.map(store =>
+    requestStore<T>(store, path, queryParams, options)
+  );
+
+  return Promise.all(promises);
+}
+
+/**
+ * Query a single store by ID.
+ */
+export async function queryStore<T>(
+  store: StoreConfig,
+  path: string,
+  queryParams?: Record<string, string>,
+  options: StoreRequestOptions = {}
+): Promise<StoreResponse<T>> {
+  return requestStore<T>(store, path, queryParams, options);
+}
+</file>
+
+<file path="server/index.ts">
+import express from "express";
+import { config } from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, join, resolve } from "path";
+import { initializeStores } from "./config/stores.js";
+import explorerRouter from "./routes/explorer.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Load environment variables
+const envFile = process.env.NODE_ENV === "production" ? ".env.production" : ".env";
+config({ path: join(__dirname, "..", envFile) });
+
+// Initialize store configuration
+initializeStores();
+
+const app = express();
+// Use PORT for external traffic (serves both API and static files in production)
+// In production, PORT is the external port, and backend serves both API and static files
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : (process.env.EXPLORER_API_PORT ? parseInt(process.env.EXPLORER_API_PORT, 10) : 4175);
+const NODE_ENV = process.env.NODE_ENV || "development";
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS for development
+if (NODE_ENV === "development") {
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+}
+
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", service: "explorer-api" });
+});
+
+// Explorer API routes
+app.use("/api/explorer", explorerRouter);
+
+// Serve static files from dist/ in production
+if (NODE_ENV === "production") {
+  const distPath = resolve(__dirname, "..", "dist");
+  app.use(express.static(distPath));
+  
+  // SPA fallback: serve index.html for all non-API routes
+  app.get("*", (req, res) => {
+    // Don't serve index.html for API routes
+    if (req.path.startsWith("/api/")) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.sendFile(resolve(distPath, "index.html"));
+  });
+} else {
+  // Development: 404 handler for non-API routes
+  app.use((req, res) => {
+    if (req.path.startsWith("/api/")) {
+      res.status(404).json({ error: "Not found" });
+    } else {
+      res.status(404).json({ error: "Not found (dev mode - use Vite dev server)" });
+    }
+  });
+}
+
+// Error handling (must be last)
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("[Explorer API] Error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+// Start server
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("=".repeat(50));
+  console.log("🔍 Explorer Server");
+  console.log("=".repeat(50));
+  console.log(`📍 Listening on: http://0.0.0.0:${PORT}`);
+  console.log(`🌍 Environment: ${NODE_ENV}`);
+  console.log(`🔗 API base path: /api/explorer`);
+  if (NODE_ENV === "production") {
+    console.log(`📦 Serving static files from: ${resolve(__dirname, "..", "dist")}`);
+  }
+  console.log("=".repeat(50));
+});
+</file>
+
+<file path="server/README.md">
+# Explorer Backend Server
+
+This directory contains the Node.js backend server for the Explorer project.
+
+## Structure
+
+- `index.ts` - Main server entrypoint
+- `config/stores.ts` - Store configuration management
+- `tsconfig.json` - TypeScript configuration for the server
+
+## Environment Variables
+
+Create a `.env` file in the repo root (or `.env.production` for production) with:
+
+```env
+EXPLORER_API_PORT=4176
+NODE_ENV=development
+MAIN_STORE_PORT=3000
+
+# Multi-store configuration (JSON array)
+EXPLORER_STORES='[{"id":"main","name":"Main SljivaStore","baseUrl":"https://store1.example.com/api/explorer"},{"id":"test","name":"Test Store","baseUrl":"https://teststore.example.com/api/explorer"}]'
+```
+
+### Store Configuration
+
+The `EXPLORER_STORES` environment variable defines multiple SljivaStore-compatible stores that the Explorer can query. If not provided or invalid, it defaults to a single local store pointing to `http://localhost:3000/api/explorer`.
+
+**Store Configuration Fields:**
+- `id` (required) - Unique identifier for the store
+- `name` (required) - Human-readable store name
+- `baseUrl` (required) - Base URL of the store's Explorer API endpoint
+- `publicKey` (optional) - Public key for store verification
+- `description` (optional) - Store description
+- `enabled` (optional) - Whether the store is enabled (default: true)
+
+**Example:**
+```json
+[
+  {
+    "id": "main",
+    "name": "Main SljivaStore",
+    "baseUrl": "https://store1.example.com/api/explorer",
+    "description": "Primary production store"
+  },
+  {
+    "id": "test",
+    "name": "Test Store",
+    "baseUrl": "https://teststore.example.com/api/explorer",
+    "enabled": true
+  }
+]
+```
+
+## Routes
+
+The server exposes aggregator routes under `/api/explorer` that query one or more configured stores:
+
+### Query Parameters
+
+All routes support an optional `storeId` query parameter:
+- If provided: Query only that specific store
+- If omitted: Query all configured stores in parallel and aggregate results
+
+Additional query parameters:
+- `skip` / `page` / `limit` - Pagination (for routes that support it)
+
+### Endpoints
+
+#### Part Lookup
+- `GET /api/explorer/parts/:partHash?storeId=...&skip=...&limit=...`
+  - Returns part metadata and paginated partial transactions
+  - Response includes `storeId` and `storeName` fields on all items
+
+#### Transaction Lookup
+- `GET /api/explorer/transactions/id/:txId?storeId=...`
+  - Look up transaction by database ID
+- `GET /api/explorer/transactions/chain/:chainTx?storeId=...`
+  - Look up transaction by chain hash
+
+#### Partial Transactions
+- `GET /api/explorer/partial-transactions/part/:partHash?storeId=...&skip=...&limit=...`
+  - Get paginated partial transactions for a part
+- `GET /api/explorer/partial-transactions/id/:txId?storeId=...&skip=...&limit=...`
+  - Get paginated partial transactions for a transaction ID
+- `GET /api/explorer/partial-transactions/chain/:chainTx?storeId=...&skip=...&limit=...`
+  - Get paginated partial transactions for a chain transaction hash
+
+### Response Format
+
+**Single Store Query:**
+```json
+{
+  "part": { ... },
+  "partialTransactions": [ ... ],
+  "pagination": { ... }
+}
+```
+
+**Multi-Store Query (aggregated):**
+```json
+{
+  "part": { ... },
+  "partialTransactions": [ ... ],
+  "pagination": { ... },
+  "errors": [
+    {
+      "storeId": "store1",
+      "storeName": "Store 1",
+      "error": "Request timed out"
+    }
+  ]
+}
+```
+
+All returned items include `storeId` and `storeName` fields to identify their source store.
+
+### Error Handling
+
+- Store timeouts: 10 seconds default
+- Failed stores are logged in the `errors` array (multi-store queries)
+- Individual store failures don't block successful responses from other stores
+- Invalid `storeId` returns 404
+- No stores configured returns 500
+
+## Development
+
+Run the server in watch mode:
+```bash
+npm run dev:server
+```
+
+Run both frontend and backend together:
+```bash
+npm run dev
+```
+
+## Production
+
+Run the server in production mode:
+```bash
+npm run start:server
+```
+</file>
+
+<file path="server/tsconfig.json">
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../dist-server",
+    "rootDir": ".",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2022"
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}
+</file>
+
+<file path="src/lib/components/PartsList.svelte">
+<script lang="ts">
+  import type { ExplorerPart, Pagination } from "../types";
+  import { formatAddress } from "../utils/format";
+  import { getPartLink } from "../utils/storeLinks";
+
+  export let parts: ExplorerPart[] = [];
+  export let pagination: Pagination | null = null;
+
+  $: rangeStart = pagination && pagination.total > 0 ? pagination.skip + 1 : parts.length ? 1 : 0;
+  $: rangeEnd = pagination && pagination.total > 0
+    ? Math.min(pagination.skip + pagination.limit, pagination.total)
+    : parts.length;
+</script>
+
+<section class="card {parts.length ? 'table-card' : ''}">
+  <h3>Parts in Transaction</h3>
+  {#if !parts.length}
+    <p class="empty">No parts found.</p>
+  {:else}
+    {#if pagination}
+      <div class="summary">
+        Showing {rangeStart}-{rangeEnd} of {pagination.total}
+      </div>
+    {/if}
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Part Hash</th>
+            <th>Part Number</th>
+            <th>Owner</th>
+            <th>Store</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each parts as part}
+            <tr>
+              <td>
+                <a
+                  href={getPartLink(part._id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="part-link"
+                >
+                  {formatAddress(part._id)}
+                </a>
+              </td>
+              <td>{part.part_no}</td>
+              <td>{formatAddress(part.owner)}</td>
+              <td>{part.storeName ?? "—"}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</section>
+
+<style>
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+  }
+
+  .table-card {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .card h3 {
+    margin: 0;
+    padding-bottom: 0.75rem;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .table-card h3 {
+    padding: 1.25rem 1.5rem 0.75rem;
+  }
+
+  .summary {
+    padding: 0 1.5rem 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 500px;
+  }
+
+  thead {
+    background: var(--table-header-bg);
+  }
+
+  th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-label);
+  }
+
+  td {
+    padding: 0.9rem 1rem;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    border-top: 1px solid var(--card-border);
+  }
+
+  tr:nth-child(odd) {
+    background: var(--table-row-alt);
+  }
+
+  .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .part-link {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .part-link:hover {
+    text-decoration: underline;
+  }
+</style>
+</file>
+
+<file path="src/lib/utils/format.ts">
+export function formatAddress(value: string, length = 6): string {
+  if (!value) return "";
+  const start = value.slice(0, length + 2);
+  const end = value.slice(-length);
+  return `${start}…${end}`;
+}
+
+export function formatDate(value: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+export function formatAmount(amount: string, currency: string): string {
+  const numeric = Number.parseFloat(amount);
+  if (Number.isNaN(numeric)) {
+    return `${amount} ${currency}`;
+  }
+  return `${numeric.toFixed(4)} ${currency.toUpperCase()}`;
+}
+</file>
+
+<file path="src/lib/utils/storeLinks.ts">
+/**
+ * Store link utilities
+ */
+
+/**
+ * Get the store frontend URL from environment or default to localhost:5173
+ */
+export function getStoreFrontendUrl(): string {
+  // Check for explicit store URL env var
+  if (import.meta.env.VITE_STORE_URL) {
+    return import.meta.env.VITE_STORE_URL.replace(/\/$/, '');
+  }
+  
+  // Default to localhost:5173 for local development
+  return 'http://localhost:5173';
+}
+
+/**
+ * Generate a link to a part in the store frontend
+ */
+export function getPartLink(partHash: string): string {
+  const base = getStoreFrontendUrl();
+  return `${base}/part/${encodeURIComponent(partHash)}`;
+}
+
+/**
+ * Generate a link to a blockchain transaction explorer
+ */
+export function getChainTxLink(chainTx: string, currency?: string): string {
+  if (!chainTx) return '#';
+  const isSol = currency?.toUpperCase() === 'SOL';
+  const base = isSol ? 'https://solscan.io/tx/' : 'https://etherscan.io/tx/';
+  // Keep the hash as-is (with or without 0x prefix)
+  return `${base}${chainTx}`;
+}
+</file>
+
+<file path="src/app.css">
+:root {
+  color-scheme: dark;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --bg-start: #0f172a;
+  --bg-end: #1e293b;
+  --text-primary: #f8fafc;
+  --text-secondary: rgba(226, 232, 240, 0.85);
+  --text-muted: rgba(226, 232, 240, 0.75);
+  --text-label: rgba(148, 163, 184, 0.9);
+  --card-bg: rgba(15, 23, 42, 0.72);
+  --card-border: rgba(148, 163, 184, 0.35);
+  --card-shadow: rgba(15, 23, 42, 0.35);
+  --input-bg: rgba(15, 23, 42, 0.75);
+  --input-border: rgba(148, 163, 184, 0.35);
+  --accent-border: rgba(94, 234, 212, 0.5);
+  --accent-shadow: rgba(45, 212, 191, 0.2);
+  --button-gradient-start: #0ea5e9;
+  --button-gradient-end: #22d3ee;
+  --button-text: #0f172a;
+  --button-shadow: rgba(34, 211, 238, 0.35);
+  --badge-bg: rgba(56, 189, 248, 0.2);
+  --badge-text: #38bdf8;
+  --border-muted: rgba(148, 163, 184, 0.35);
+  --image-border: rgba(148, 163, 184, 0.25);
+  --accent: #22d3ee;
+  --danger: #f87171;
+  --table-header-bg: rgba(51, 65, 85, 0.6);
+  --table-row-alt: rgba(148, 163, 184, 0.05);
+}
+
+body.light-theme {
+  color-scheme: light;
+  --bg-start: #f8fafc;
+  --bg-end: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: rgba(30, 41, 59, 0.85);
+  --text-muted: rgba(30, 41, 59, 0.6);
+  --text-label: rgba(30, 41, 59, 0.7);
+  --card-bg: rgba(255, 255, 255, 0.92);
+  --card-border: rgba(148, 163, 184, 0.4);
+  --card-shadow: rgba(15, 23, 42, 0.12);
+  --input-bg: rgba(255, 255, 255, 1);
+  --input-border: rgba(148, 163, 184, 0.45);
+  --accent-border: rgba(14, 165, 233, 0.35);
+  --accent-shadow: rgba(14, 165, 233, 0.2);
+  --button-text: #0f172a;
+  --button-shadow: rgba(14, 165, 233, 0.3);
+  --badge-bg: rgba(14, 165, 233, 0.12);
+  --badge-text: #0369a1;
+  --border-muted: rgba(148, 163, 184, 0.45);
+  --image-border: rgba(148, 163, 184, 0.4);
+  --accent: #0284c7;
+  --danger: #dc2626;
+  --table-header-bg: rgba(226, 232, 240, 0.85);
+  --table-row-alt: rgba(148, 163, 184, 0.12);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
+  color: var(--text-primary);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+}
+</file>
+
+<file path="src/app.d.ts">
+/// <reference types="svelte" />
+/// <reference types="vite/client" />
+</file>
+
+<file path="src/main.ts">
+import "./app.css";
+import App from "./App.svelte";
+import { mount } from "svelte";
+
+const target = document.getElementById("app");
+
+if (!target) {
+  throw new Error("Root element #app not found");
+}
+
+export default mount(App, {
+  target
+});
+</file>
+
+<file path=".cursorrules">
+# Cursor AI Rules for Explorer
+
+## Context Source Priority
+- Always inspect `../orch_ai_strator/context/repomix-output.xml` first for
+  backend details.
+- Consult the docs in `./docs` for Explorer-specific constraints before
+  reading source files.
+
+## Explorer Constraints
+- Explorer is read-only: never mutate backend data.
+- All data comes from SljivaStore backend APIs described in the docs.
+- Use the `/api/explorer/*` routes for search operations.
+
+## Workflow
+1. Understand the feature request.
+2. Review Explorer docs to capture domain context.
+3. Only read or edit files under `explorer/` unless instructed otherwise.
+</file>
+
+<file path="ADD_YOUR_STORE.md">
+# Adding Your Store to Explorer
+
+The Explorer can't find your data because your store isn't configured. Here's how to add it:
+
+## Step 1: Determine Your Store URL
+
+Based on your nginx configuration, your store should be accessible at one of these domains:
+- `http://kodak.beogradfilm.com/api/explorer`
+- `http://nft.kodak.press/api/explorer`  
+- `http://nft.beogradfilm.com/api/explorer`
+
+**Replace with your actual domain** - whichever one you use to access your store website.
+
+If you're running locally, it might be:
+- `http://localhost:3000/api/explorer`
+
+## Step 2: Add Your Store
+
+### Option A: Using the Script (Easiest)
+
+```bash
+cd explorer
+./scripts/add-store.sh main "My SljivaStore" http://YOUR-DOMAIN/api/explorer
+```
+
+Replace `YOUR-DOMAIN` with your actual domain (e.g., `kodak.beogradfilm.com`).
+
+### Option B: Manual Configuration
+
+1. Edit `explorer/.env.production` (or create it if it doesn't exist):
+
+```bash
+cd explorer
+nano .env.production
+```
+
+2. Add or update the `EXPLORER_STORES` variable:
+
+```bash
+EXPLORER_STORES='[
+  {
+    "id": "main",
+    "name": "My SljivaStore",
+    "baseUrl": "http://kodak.beogradfilm.com/api/explorer"
+  }
+]'
+```
+
+Replace `http://kodak.beogradfilm.com` with your actual store URL.
+
+**Important**: The `baseUrl` must end with `/api/explorer`
+
+## Step 3: Restart Explorer
+
+After adding the store, restart the Explorer:
+
+```bash
+# If using Docker
+docker restart explorer
+
+# If running directly
+# Stop the current process and restart it
+cd explorer
+npm run build
+npm run start:server
+```
+
+## Step 4: Verify
+
+1. Check that stores are loaded:
+```bash
+curl http://localhost:4175/api/explorer/stores
+```
+
+You should see your store in the list.
+
+2. Try searching again for your transaction hash or part hash.
+
+## Troubleshooting
+
+### Store URL Format
+
+The baseUrl must:
+- End with `/api/explorer`
+- Be accessible from where Explorer is running
+- Use the correct protocol (`http://` or `https://`)
+
+### Multiple Stores
+
+You can add multiple stores by adding more objects to the array:
+
+```bash
+EXPLORER_STORES='[
+  {
+    "id": "main",
+    "name": "Main Store",
+    "baseUrl": "http://store1.example.com/api/explorer"
+  },
+  {
+    "id": "secondary",
+    "name": "Secondary Store",
+    "baseUrl": "http://store2.example.com/api/explorer"
+  }
+]'
+```
+
+### Testing the Store URL
+
+Before adding, test that the store API is accessible:
+
+```bash
+# Test the stores endpoint
+curl http://YOUR-DOMAIN/api/explorer/stores
+
+# Test a part search (should return 404 if part doesn't exist, but proves the endpoint works)
+curl http://YOUR-DOMAIN/api/explorer/parts/test-hash-12345
+```
+
+If these return errors, check that:
+- Your backend is running
+- The `/api/explorer` routes are enabled
+- The domain/port is correct
+</file>
+
+<file path="index.html">
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SljivaStore Explorer</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+</file>
+
+<file path="LOCAL_SETUP.md">
+# Local Development Setup
+
+## Configuration
+
+The Explorer is now configured to use your local backend:
+
+- **Backend**: `http://localhost:3000`
+- **Explorer**: `http://localhost:4175`
+- **Frontend**: `http://localhost:5173`
+
+## Current Configuration
+
+The `.env` file in the explorer directory is set to:
+
+```bash
+EXPLORER_STORES='[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]'
+MAIN_STORE_PORT=3000
+PORT=4175
+```
+
+## Running the Explorer
+
+### Development Mode
+
+```bash
+cd explorer
+npm run dev
+```
+
+This will:
+- Start the Explorer frontend on port **4175**
+- Start the Explorer API server on port **4176**
+- Both are accessible and will proxy API calls to your backend
+
+### Production Mode
+
+```bash
+cd explorer
+npm run build
+npm run start:server
+```
+
+This will:
+- Build the frontend
+- Start the server on port **4175** serving both the API and static files
+
+## Restart After Configuration Changes
+
+If you change the `.env` file, you need to restart the Explorer:
+
+1. Stop the current process (Ctrl+C)
+2. Start it again with `npm run dev` or `npm run start:server`
+
+## Testing
+
+1. **Check stores are loaded** (when explorer is running):
+   ```bash
+   curl http://localhost:4175/api/explorer/stores
+   ```
+
+2. **Search for a part**:
+   - Open `http://localhost:4175`
+   - Enter a part hash in the search field
+   - Click Search
+
+3. **Search for a transaction**:
+   - Enter a chain hash (with or without 0x prefix) or transaction ID
+   - The unified search will try all variations automatically
+
+## Troubleshooting
+
+### Explorer can't find data
+
+1. **Check backend is running**:
+   ```bash
+   curl http://localhost:3000/api/explorer/parts/test
+   ```
+   Should return an error about the part not being found (404), not a connection error.
+
+2. **Check explorer configuration**:
+   ```bash
+   curl http://localhost:4175/api/explorer/stores
+   ```
+   Should return your local store configuration.
+
+3. **Check explorer logs**:
+   Look for store configuration messages when the explorer starts. You should see:
+   ```
+   [Stores Config] Loaded 1 store(s):
+     - local: Local SljivaStore (http://localhost:3000/api/explorer)
+   ```
+
+### Backend not accessible
+
+If the backend is in Docker or on a different network:
+- Make sure the backend is accessible from where the explorer is running
+- Update the `baseUrl` in `.env` to match your setup (e.g., `http://host.docker.internal:3000/api/explorer` for Docker Desktop)
+
+### Port conflicts
+
+If port 4175 is already in use:
+- Change `PORT=4175` to a different port in `.env`
+- Or stop the process using port 4175
+</file>
+
+<file path="orchestrate">
+#!/bin/bash
+
+# Orch AI Strator entrypoint for the Explorer project.
+
+if [ $# -eq 0 ]; then
+  echo "🎭 Explorer Orch AI Strator"
+  echo ""
+  echo "Usage: $0 \"Your request here\""
+  echo ""
+  echo "Example:"
+  echo "  $0 \"Bootstrap Explorer search page\""
+  echo ""
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "🎭 Explorer Orch AI Strator Processing: $*"
+echo ""
+
+# Reuse the root Orch AI Strator since it already understands the repo structure.
+cd "${SCRIPT_DIR}/../orch_ai_strator"
+node scripts/orchestrate-mock.js "$*"
+</file>
+
+<file path="RESTART_INSTRUCTIONS.md">
+# Restart Instructions
+
+The explorer needs to be restarted to pick up the configuration changes. Here's what to do:
+
+## Stop Current Processes
+
+If you see port conflicts, stop all explorer processes:
+
+```bash
+cd explorer
+pkill -f "tsx watch server/index.ts"
+pkill -f "vite dev"
+pkill -f "concurrently"
+```
+
+Or press `Ctrl+C` in the terminal where `npm run dev` is running.
+
+## Configuration
+
+Your `.env` file is now configured for local development:
+
+```
+EXPLORER_STORES='[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]'
+MAIN_STORE_PORT=3000
+```
+
+**Important**: No `PORT=` variable is set, so the server will use `EXPLORER_API_PORT=4176` from package.json.
+
+## Start Explorer
+
+```bash
+cd explorer
+npm run dev
+```
+
+This will:
+- Start Vite frontend on port **4175** (http://localhost:4175)
+- Start Explorer API server on port **4176** (internal)
+- Vite will proxy `/api/explorer/*` requests to port 4176
+
+## Verify It's Working
+
+1. Check that stores are loaded:
+   ```bash
+   curl http://localhost:4175/api/explorer/stores
+   ```
+   Should return: `[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]`
+
+2. Try searching in the browser at http://localhost:4175
+
+## If You Still Get Errors
+
+1. **500 errors from backend**: Check backend logs for errors
+2. **Port conflicts**: Make sure no other process is using ports 4175 or 4176
+3. **Connection refused**: Make sure the backend is running on port 3000
+</file>
+
+<file path="svelte.config.js">
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+
+export default {
+  preprocess: vitePreprocess(),
+  compilerOptions: {
+    dev: process.env.NODE_ENV !== "production"
+  }
+};
+</file>
+
+<file path="tsconfig.json">
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*", "vite.config.ts", "svelte.config.js"]
+}
+</file>
+
+<file path="vitest.config.ts">
+import { defineConfig } from "vitest/config";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+
+export default defineConfig({
+  plugins: [svelte()],
+  resolve: {
+    conditions: ["browser", "development"],
+    dedupe: ["svelte"]
+  },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./vitest.setup.ts"]
+  }
+});
+</file>
+
+<file path="vitest.setup.ts">
+import "@testing-library/jest-dom";
+</file>
+
+<file path="docs/INSTALLATION.md">
+# Explorer Installation Guide
+
+Complete guide for installing all prerequisites needed to run the Explorer.
+
+## Table of Contents
+
+1. [System Requirements](#system-requirements)
+2. [Docker Installation](#docker-installation)
+3. [Docker Compose Installation](#docker-compose-installation)
+4. [Node.js Installation (for Development)](#nodejs-installation-for-development)
+5. [Verification](#verification)
+6. [Quick Start](#quick-start)
+
+---
+
+## System Requirements
+
+- **OS**: Linux (Ubuntu/Debian recommended), macOS, or Windows with WSL2
+- **RAM**: Minimum 2GB, recommended 4GB+
+- **Disk**: At least 5GB free space
+- **Network**: Internet connection for downloading dependencies
+
+---
+
+## Docker Installation
+
+### Ubuntu/Debian
+
+**Option 1: Official Docker Installation Script (Recommended - Most Reliable)**
+
+```bash
+# Download and run official Docker installation script
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Add your user to docker group (to run without sudo)
+sudo usermod -aG docker $USER
+
+# Start Docker service
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Verify installation
+sudo docker run hello-world
+
+# Log out and back in for group changes to take effect
+# After logging back in, you can run docker without sudo
+```
+
+**Option 2: Manual Installation (Alternative)**
+
+If the script doesn't work, try manual installation:
+
+```bash
+# Update package index
+sudo apt update
+
+# Install prerequisites
+sudo apt install -y ca-certificates curl gnupg lsb-release
+
+# Remove old Docker versions if any
+sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+
+# Add Docker's official GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Detect distribution
+DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+CODENAME=$(lsb_release -cs)
+
+# Set up Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${DISTRO} \
+  ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Update package index again
+sudo apt update
+
+# Install Docker Engine
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add your user to docker group
+sudo usermod -aG docker $USER
+
+# Start Docker service
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Verify
+sudo docker run hello-world
+```
+
+### macOS
+
+**Option 1: Docker Desktop (Recommended)**
+
+1. Download Docker Desktop from: https://www.docker.com/products/docker-desktop
+2. Install the `.dmg` file
+3. Launch Docker Desktop from Applications
+4. Follow the setup wizard
+
+**Option 2: Homebrew**
+
+```bash
+brew install --cask docker
+```
+
+### Windows
+
+1. Install WSL2 (Windows Subsystem for Linux 2)
+2. Download Docker Desktop from: https://www.docker.com/products/docker-desktop
+3. Install and launch Docker Desktop
+4. Ensure WSL2 integration is enabled in Docker Desktop settings
+
+### Verify Docker Installation
+
+```bash
+docker --version
+docker run hello-world
+```
+
+---
+
+## Docker Compose Installation
+
+Docker Compose is included with Docker Desktop (macOS/Windows) and Docker Engine 20.10+ (Linux).
+
+### Ubuntu/Debian (if not included)
+
+```bash
+# Docker Compose is included in docker-compose-plugin
+# Verify installation:
+docker compose version
+```
+
+### Manual Installation (if needed)
+
+```bash
+# Download latest release
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+
+# Make executable
+sudo chmod +x /usr/local/bin/docker-compose
+
+# Verify
+docker-compose --version
+```
+
+---
+
+## Node.js Installation (for Development)
+
+**Note:** Node.js is only needed if you want to run Explorer in development mode (`npm run dev`). For production Docker deployment, Node.js is included in the container.
+
+### Ubuntu/Debian
+
+**Option 1: Using NodeSource (Recommended for Node 20+)**
+
+```bash
+# Install Node.js 20.x
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Verify installation
+node --version
+npm --version
+```
+
+**Option 2: Using nvm (Node Version Manager)**
+
+```bash
+# Install nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+
+# Reload shell
+source ~/.bashrc
+
+# Install Node.js 20
+nvm install 20
+nvm use 20
+
+# Verify
+node --version
+npm --version
+```
+
+### macOS
+
+**Option 1: Homebrew**
+
+```bash
+brew install node@20
+```
+
+**Option 2: nvm**
+
+```bash
+# Install nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+
+# Reload shell
+source ~/.zshrc
+
+# Install Node.js 20
+nvm install 20
+nvm use 20
+```
+
+### Windows
+
+1. Download Node.js installer from: https://nodejs.org/
+2. Choose LTS version (20.x recommended)
+3. Run installer and follow wizard
+4. Verify: Open PowerShell and run `node --version`
+
+---
+
+## Verification
+
+Run these commands to verify all prerequisites are installed:
+
+```bash
+# Check Docker
+docker --version
+docker compose version
+
+# Check Node.js (if installed for development)
+node --version  # Should be v20.x or higher
+npm --version
+
+# Check Git (usually pre-installed)
+git --version
+```
+
+**Expected output:**
+```
+Docker version 24.x.x
+Docker Compose version v2.x.x
+node v20.x.x
+npm 10.x.x
+git version 2.x.x
+```
+
+---
+
+## Quick Start
+
+Once all prerequisites are installed:
+
+### 1. Clone the Repository
+
+```bash
+git clone <explorer-repo-url>
+cd explorer
+```
+
+### 2. Build and Run with Docker
+
+```bash
+# Build the image
+docker build -t explorer .
+
+# Run the container
+docker run -d \
+  --name explorer \
+  -p 4175:4175 \
+  -e NODE_ENV=production \
+  explorer
+```
+
+### 3. Or Run in Development Mode
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+```
+
+### 4. Access Explorer
+
+Open your browser: `http://localhost:4175`
+
+---
+
+## Troubleshooting
+
+### Docker permission denied
+
+```bash
+# Add user to docker group
+sudo usermod -aG docker $USER
+# Log out and back in
+```
+
+### Docker daemon not running
+
+```bash
+# Linux
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# macOS/Windows: Start Docker Desktop application
+```
+
+### Port already in use
+
+```bash
+# Check what's using port 4175
+sudo lsof -i :4175  # Linux/macOS
+netstat -ano | findstr :4175  # Windows
+
+# Kill the process or use a different port
+docker run -p 4176:4175 ...
+```
+
+### Node.js version too old
+
+```bash
+# Update using nvm
+nvm install 20
+nvm use 20
+
+# Or reinstall from NodeSource (Linux)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+---
+
+## Next Steps
+
+After installation, see [DEPLOYMENT.md](./DEPLOYMENT.md) for:
+- Production deployment configuration
+- Adding stores to Explorer
+- Enabling Explorer access on stores
+</file>
+
+<file path="scripts/add-store.sh">
+#!/bin/bash
+# Script to add a store to Explorer configuration
+# Usage: ./scripts/add-store.sh <store-id> <store-name> <base-url> [public-key]
+
+set -e
+
+if [ $# -lt 3 ]; then
+  echo "Usage: $0 <store-id> <store-name> <base-url> [public-key]"
+  echo ""
+  echo "Example:"
+  echo "  $0 main \"Main Store\" https://store.example.com/api/explorer"
+  exit 1
+fi
+
+STORE_ID="$1"
+STORE_NAME="$2"
+BASE_URL="$3"
+PUBLIC_KEY="${4:-}"
+
+# Ensure baseUrl ends with /api/explorer
+if [[ ! "$BASE_URL" =~ /api/explorer$ ]]; then
+  BASE_URL="${BASE_URL%/}/api/explorer"
+fi
+
+# Read current EXPLORER_STORES from .env.production or .env
+ENV_FILE=".env.production"
+if [ ! -f "$ENV_FILE" ]; then
+  ENV_FILE=".env"
+fi
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Creating $ENV_FILE..."
+  touch "$ENV_FILE"
+fi
+
+# Extract current stores or use empty array
+CURRENT_STORES=$(grep "^EXPLORER_STORES=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed "s/^'//; s/'$//" || echo '[]')
+
+# Validate JSON or default to empty array
+if [ -z "$CURRENT_STORES" ] || [ "$CURRENT_STORES" = "" ]; then
+  CURRENT_STORES='[]'
+fi
+
+# Create temp file for JSON processing
+TEMP_JSON=$(mktemp)
+echo "$CURRENT_STORES" > "$TEMP_JSON"
+
+# Validate JSON before parsing
+if ! node -e "JSON.parse(require('fs').readFileSync('$TEMP_JSON', 'utf-8'))" 2>/dev/null; then
+  echo "⚠️  Invalid JSON in EXPLORER_STORES, resetting to empty array"
+  echo '[]' > "$TEMP_JSON"
+fi
+
+# Parse JSON and add new store
+NEW_STORES=$(node -e "
+  const fs = require('fs');
+  const stores = JSON.parse(fs.readFileSync('$TEMP_JSON', 'utf-8'));
+  const newStore = {
+    id: '$STORE_ID',
+    name: '$STORE_NAME',
+    baseUrl: '$BASE_URL'
+  };
+  if ('$PUBLIC_KEY') {
+    newStore.publicKey = '$PUBLIC_KEY';
+  }
+  
+  // Remove existing store with same ID if present
+  const filtered = stores.filter(s => s.id !== '$STORE_ID');
+  filtered.push(newStore);
+  console.log(JSON.stringify(filtered));
+")
+
+rm -f "$TEMP_JSON"
+
+# Update .env file
+if grep -q "^EXPLORER_STORES=" "$ENV_FILE"; then
+  # Update existing line
+  sed -i "s|^EXPLORER_STORES=.*|EXPLORER_STORES='$NEW_STORES'|" "$ENV_FILE"
+else
+  # Add new line
+  echo "EXPLORER_STORES='$NEW_STORES'" >> "$ENV_FILE"
+fi
+
+echo "✅ Store '$STORE_ID' added successfully!"
+echo ""
+echo "Updated configuration:"
+echo "$NEW_STORES" | node -e "console.log(JSON.stringify(JSON.parse(require('fs').readFileSync(0, 'utf-8')), null, 2))"
+echo ""
+echo "⚠️  Restart Explorer server for changes to take effect:"
+echo "   docker restart explorer"
+echo "   # or"
+echo "   # Stop and restart your Node.js process"
+</file>
+
+<file path="scripts/discover-store.sh">
+#!/bin/bash
+# Script to discover and add a store using /.well-known/store-info
+# Usage: ./scripts/discover-store.sh <store-url>
+
+set -e
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <store-url>"
+  echo ""
+  echo "Example:"
+  echo "  $0 https://store.example.com"
+  exit 1
+fi
+
+STORE_URL="$1"
+# Remove trailing slash
+STORE_URL="${STORE_URL%/}"
+
+echo "🔍 Discovering store at $STORE_URL..."
+
+# Fetch store info with error handling
+DISCOVERY_URL="${STORE_URL}/.well-known/store-info"
+
+# Check if endpoint exists and returns JSON
+HTTP_CODE=$(curl -s -o /tmp/store-info-response.txt -w "%{http_code}" "$DISCOVERY_URL" || echo "000")
+
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "❌ Failed to fetch store info from $DISCOVERY_URL"
+  echo "   HTTP Status: $HTTP_CODE"
+  if [ "$HTTP_CODE" = "404" ]; then
+    echo "   The endpoint does not exist. The store may not have discovery enabled."
+    echo "   You can manually add the store using: ./scripts/add-store.sh"
+  elif [ "$HTTP_CODE" = "000" ]; then
+    echo "   Network error - could not connect to the server."
+  else
+    echo "   Response preview:"
+    head -n 3 /tmp/store-info-response.txt 2>/dev/null || echo "   (no response body)"
+  fi
+  rm -f /tmp/store-info-response.txt
+  exit 1
+fi
+
+STORE_INFO=$(cat /tmp/store-info-response.txt)
+rm -f /tmp/store-info-response.txt
+
+# Validate that response is JSON
+if ! echo "$STORE_INFO" | node -e "
+  try {
+    const data = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+    if (typeof data !== 'object' || data === null) {
+      process.exit(1);
+    }
+  } catch (e) {
+    console.error('Invalid JSON response. The endpoint may be returning HTML or an error page.');
+    process.exit(1);
+  }
+" 2>/dev/null; then
+  echo "❌ Invalid response from $DISCOVERY_URL"
+  echo "   Expected JSON but received:"
+  echo "$STORE_INFO" | head -n 5
+  echo ""
+  echo "   The endpoint may not be properly configured or may be returning an error page."
+  echo "   You can manually add the store using: ./scripts/add-store.sh"
+  exit 1
+fi
+
+# Extract store details with error handling
+STORE_ID=$(echo "$STORE_INFO" | node -e "
+  try {
+    const d = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+    console.log(d.id || '');
+  } catch (e) {
+    process.exit(1);
+  }
+" 2>/dev/null || echo "")
+
+STORE_NAME=$(echo "$STORE_INFO" | node -e "
+  try {
+    const d = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+    console.log(d.name || '');
+  } catch (e) {
+    process.exit(1);
+  }
+" 2>/dev/null || echo "")
+
+BASE_URL=$(echo "$STORE_INFO" | node -e "
+  try {
+    const d = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+    console.log(d.baseUrl || '');
+  } catch (e) {
+    process.exit(1);
+  }
+" 2>/dev/null || echo "")
+
+PUBLIC_KEY=$(echo "$STORE_INFO" | node -e "
+  try {
+    const d = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+    console.log(d.publicKey || '');
+  } catch (e) {
+    console.log('');
+  }
+" 2>/dev/null || echo "")
+
+if [ -z "$STORE_ID" ] || [ -z "$STORE_NAME" ] || [ -z "$BASE_URL" ]; then
+  echo "❌ Invalid store info response:"
+  echo "$STORE_INFO"
+  exit 1
+fi
+
+echo "✅ Discovered store:"
+echo "   ID: $STORE_ID"
+echo "   Name: $STORE_NAME"
+echo "   Base URL: $BASE_URL"
+if [ -n "$PUBLIC_KEY" ]; then
+  echo "   Public Key: $PUBLIC_KEY"
+fi
+echo ""
+
+# Call add-store script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "$PUBLIC_KEY" ]; then
+  "$SCRIPT_DIR/add-store.sh" "$STORE_ID" "$STORE_NAME" "$BASE_URL" "$PUBLIC_KEY"
+else
+  "$SCRIPT_DIR/add-store.sh" "$STORE_ID" "$STORE_NAME" "$BASE_URL"
+fi
+</file>
+
 <file path="src/lib/components/PartialTable.svelte">
 <script lang="ts">
   import type { PartialTransaction, Pagination } from "../types";
@@ -344,6 +2193,7 @@ The app will be available at `http://localhost:4175`.
             <th>Amount</th>
             <th>Chain Hash</th>
             <th>Timestamp</th>
+            <th>Store</th>
           </tr>
         </thead>
         <tbody>
@@ -368,6 +2218,7 @@ The app will be available at `http://localhost:4175`.
                 {/if}
               </td>
               <td>{formatDate(partial.timestamp)}</td>
+              <td>{partial.storeName ?? "—"}</td>
             </tr>
           {/each}
         </tbody>
@@ -457,13 +2308,1093 @@ The app will be available at `http://localhost:4175`.
 </style>
 </file>
 
+<file path="tests/api.test.ts">
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { searchExplorer, fetchStores } from "../src/lib/api";
+
+function mockResponse(response: unknown, ok = true) {
+  return {
+    ok,
+    json: vi.fn().mockResolvedValue(response),
+    status: ok ? 200 : 500
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("fetchStores", () => {
+  it("fetches store list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse([
+          { id: "local", name: "Local Store" },
+          { id: "main", name: "Main Store" }
+        ])
+      )
+    );
+
+    const stores = await fetchStores();
+    expect(stores).toHaveLength(2);
+    expect(stores[0].id).toBe("local");
+    expect(stores[0].name).toBe("Local Store");
+  });
+
+  it("throws on error response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500
+      })
+    );
+
+    await expect(fetchStores()).rejects.toThrow();
+  });
+});
+
+describe("searchExplorer", () => {
+  it("fetches part data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          mockResponse({
+            part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+            partialTransactions: [],
+            pagination: { total: 1, skip: 0, limit: 50 }
+          })
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            _id: "nft",
+            name: "Test NFT",
+            description: "Desc",
+            creator: "0xabc",
+            imageurl: "https://example.com/img.png"
+          })
+        )
+    );
+
+    const result = await searchExplorer("part", "hash");
+    expect(result.kind).toBe("part");
+    if (result.kind === "part") {
+      expect(result.part._id).toBe("hash");
+      expect(result.nft?.imageurl).toBe("https://example.com/img.png");
+    }
+  });
+
+  it("includes storeId in query params when provided", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        mockResponse({
+          part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+          partialTransactions: [],
+          pagination: { total: 1, skip: 0, limit: 50 }
+        })
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          _id: "nft",
+          name: "Test NFT",
+          description: "Desc",
+          creator: "0xabc"
+        })
+      );
+
+    await searchExplorer("part", "hash", { storeId: "main" });
+
+    const firstCall = fetchMock.mock.calls[0];
+    expect(firstCall[0]).toContain("storeId=main");
+  });
+
+  it("throws on error response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: vi.fn().mockResolvedValue({ error: "Not found" })
+      })
+    );
+
+    await expect(searchExplorer("part", "missing")).rejects.toThrow("Not found");
+  });
+});
+</file>
+
+<file path="tests/SearchPanel.test.ts">
+import { fireEvent, render } from "@testing-library/svelte";
+import { describe, expect, it, vi } from "vitest";
+import SearchPanel from "../src/lib/components/SearchPanel.svelte";
+
+describe("SearchPanel", () => {
+  it("emits search event with current mode and query", async () => {
+    const onSearch = vi.fn();
+    const { getByLabelText, getByText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        stores: [],
+        onSearch
+      }
+    });
+
+    const input = getByLabelText("Value") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "part-hash" } });
+
+    const submit = getByText("Search");
+    await fireEvent.click(submit);
+
+    expect(onSearch).toHaveBeenCalledWith({ mode: "part", query: "part-hash", storeId: null });
+  });
+
+  it("hides store selector when only one store", () => {
+    const { queryByLabelText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        stores: [{ id: "local", name: "Local Store" }]
+      }
+    });
+
+    expect(queryByLabelText("Store")).toBeNull();
+  });
+
+  it("shows store selector when multiple stores", () => {
+    const { getByLabelText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        stores: [
+          { id: "local", name: "Local Store" },
+          { id: "main", name: "Main Store" }
+        ]
+      }
+    });
+
+    const selector = getByLabelText("Store") as HTMLSelectElement;
+    expect(selector).toBeDefined();
+    expect(selector.options).toHaveLength(3); // "All stores" + 2 stores
+  });
+
+  it("emits search event with selected storeId", async () => {
+    const onSearch = vi.fn();
+    const { getByLabelText, getByText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "test",
+        stores: [
+          { id: "local", name: "Local Store" },
+          { id: "main", name: "Main Store" }
+        ],
+        selectedStoreId: "main",
+        onSearch
+      }
+    });
+
+    const submit = getByText("Search");
+    await fireEvent.click(submit);
+
+    expect(onSearch).toHaveBeenCalledWith({ mode: "part", query: "test", storeId: "main" });
+  });
+
+  it("disables controls while loading", () => {
+    const { getByText } = render(SearchPanel, {
+      props: {
+        mode: "part",
+        query: "",
+        stores: [],
+        loading: true
+      }
+    });
+
+    const submit = getByText("Searching…") as HTMLButtonElement;
+    expect(submit).toBeDisabled();
+  });
+});
+</file>
+
+<file path=".gitignore">
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-server/
+.svelte-kit/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+</file>
+
+<file path="Dockerfile">
+#
+# Multi-stage build for Explorer (frontend + backend)
+#
+# Stage 1: Build Svelte frontend
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Copy package files and install dependencies
+COPY package.json package-lock.json* ./
+RUN npm install --frozen-lockfile
+
+# Copy source files and build frontend
+COPY . .
+RUN npm run build
+
+# Stage 2: Runtime with backend and static files
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Install production dependencies only
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --frozen-lockfile
+
+# Copy built frontend from build stage
+COPY --from=build /app/dist ./dist
+
+# Copy backend server files
+COPY server ./server
+COPY tsconfig.json ./
+
+# Install tsx for running TypeScript in production and curl for healthcheck
+RUN npm install --global tsx@latest && \
+    apk add --no-cache curl
+
+# Environment variables documentation:
+# - PORT: External port for serving both API and frontend (default: 4175)
+# - EXPLORER_API_PORT: Internal backend port (default: 4176, only used if PORT not set)
+# - EXPLORER_STORES: JSON array of store configurations (optional, defaults to local store)
+# - NODE_ENV: Set to "production" for production mode
+# - MAIN_STORE_PORT: Port of main SljivaStore backend (default: 3000, for local store default)
+#
+# Example EXPLORER_STORES:
+# [{"id":"main","name":"Main SljivaStore","baseUrl":"https://store1.example.com/api/explorer"}]
+
+EXPOSE 4175
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:4175/health || exit 1
+
+# Start backend server (serves both API and static files in production)
+CMD ["tsx", "server/index.ts"]
+</file>
+
+<file path="package.json">
+{
+  "name": "explorer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:frontend\"",
+    "dev:server": "EXPLORER_API_PORT=4176 tsx watch server/index.ts",
+    "dev:frontend": "vite dev --host 0.0.0.0 --port 4175",
+    "build": "vite build",
+    "preview": "vite preview --port 4175",
+    "start:server": "NODE_ENV=production tsx server/index.ts",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "svelte": "^5.38.1",
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tsconfig/svelte": "^5.0.2",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "concurrently": "^8.2.2",
+    "jsdom": "^24.0.0",
+    "svelte-check": "^4.0.0",
+    "tslib": "^2.6.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.0.0",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "@testing-library/svelte": "^5.0.0",
+    "@testing-library/jest-dom": "^6.4.2",
+    "@sveltejs/vite-plugin-svelte-inspector": "^4.0.1"
+  }
+}
+</file>
+
+<file path="vite.config.ts">
+import { defineConfig, loadEnv } from "vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const explorerApiPort = env.EXPLORER_API_PORT || "4176";
+  const explorerApiUrl = `http://localhost:${explorerApiPort}`;
+  const backendUrl = env.VITE_BACKEND_URL || "http://localhost:3000";
+
+  return {
+    plugins: [svelte()],
+    server: {
+      port: 4175,
+      proxy: {
+        // Proxy Explorer API to local backend (must come before /api to avoid conflicts)
+        "/api/explorer": {
+          target: explorerApiUrl,
+          changeOrigin: true,
+          secure: false
+          // No rewrite needed - path is passed through as-is
+        },
+        // Proxy other API calls to main store backend (excludes /api/explorer)
+        "^/api/(?!explorer)": {
+          target: backendUrl,
+          changeOrigin: true,
+          secure: false
+        }
+      }
+    },
+    preview: {
+      port: 4175
+    },
+    build: {
+      outDir: "dist"
+    }
+  };
+});
+</file>
+
+<file path="docs/DEPLOYMENT.md">
+# Explorer Deployment Guide
+
+Complete guide for deploying the Explorer in production and managing store connections.
+
+## Quick Start
+
+**Recommended order:**
+
+```bash
+# 1. Deploy Explorer
+git clone <explorer-repo>
+cd explorer
+docker build -t explorer .
+docker run -d -p 4175:4175 --env-file .env.production explorer
+
+# 2. Enable Explorer on store (set CORS) - DO THIS FIRST
+cd ../backend  # or navigate to your store's backend directory
+./scripts/enable-explorer.sh https://explorer.example.com
+
+# 3. Add store to Explorer (after CORS is enabled)
+cd ../explorer  # or navigate to your explorer directory
+./scripts/discover-store.sh https://store.example.com
+# OR manually:
+./scripts/add-store.sh main "Store Name" https://store.example.com/api/explorer
+```
+
+**Why this order?**
+- Discovery (`/.well-known/store-info`) works without CORS (it's a public endpoint)
+- But Explorer needs CORS enabled to query the actual API routes (`/api/explorer/**`)
+- Enabling CORS first ensures Explorer can query immediately after being added
+
+## Table of Contents
+
+1. [Production Deployment](#production-deployment)
+2. [Adding a Store to Explorer](#adding-a-store-to-explorer)
+3. [Enabling Explorer Access on a Store](#enabling-explorer-access-on-a-store)
+4. [Store Discovery](#store-discovery)
+
+---
+
+## Production Deployment
+
+### Prerequisites
+
+- **Docker** installed (see [INSTALLATION.md](./INSTALLATION.md) for Docker setup)
+- **Git** installed
+- Access to the Explorer repository
+
+### Minimal Production Setup (Docker)
+
+**Quick deployment on a fresh server:**
+
+```bash
+# 1. Install Docker (if not installed)
+# See INSTALLATION.md for detailed instructions
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+# Log out and back in
+
+# 2. Clone repository
+git clone <explorer-repo-url>
+cd explorer
+
+# 3. Create minimal .env.production
+cat > .env.production << EOF
+NODE_ENV=production
+PORT=4175
+EXPLORER_STORES='[{"id":"local","name":"Local Store","baseUrl":"http://localhost:3000/api/explorer"}]'
+EOF
+
+# 4. Build and run
+docker build -t explorer .
+docker run -d \
+  --name explorer \
+  -p 4175:4175 \
+  --env-file .env.production \
+  --restart unless-stopped \
+  explorer
+
+# 5. Verify
+curl http://localhost:4175/health
+```
+
+**That's it!** Explorer is now running. Access it at `http://your-server:4175`
+
+### Step 1: Clone and Setup
+
+```bash
+# Clone the repository
+git clone <explorer-repo-url>
+cd explorer
+
+# Install dependencies
+npm install
+```
+
+### Step 2: Configure Environment
+
+Create a `.env.production` file:
+
+```bash
+# Required
+NODE_ENV=production
+PORT=4175
+
+# Store Configuration (JSON array)
+EXPLORER_STORES='[
+  {
+    "id": "main",
+    "name": "Main SljivaStore",
+    "baseUrl": "https://store.example.com/api/explorer"
+  }
+]'
+
+# Optional: Main store port (for local store default)
+MAIN_STORE_PORT=3000
+```
+
+### Step 3: Build and Run
+
+#### Option A: Docker (Recommended)
+
+```bash
+# Build the image
+docker build -t explorer .
+
+# Run the container
+docker run -d \
+  --name explorer \
+  -p 4175:4175 \
+  --env-file .env.production \
+  --restart unless-stopped \
+  explorer
+```
+
+#### Option B: Direct Node.js
+
+```bash
+# Build frontend
+npm run build
+
+# Start server
+NODE_ENV=production npm run start:server
+```
+
+### Step 4: Verify Deployment
+
+```bash
+# Check health
+curl http://localhost:4175/health
+
+# Check stores
+curl http://localhost:4175/api/explorer/stores
+
+# Open in browser
+# http://your-server:4175
+```
+
+### Step 5: Reverse Proxy (Nginx Example)
+
+```nginx
+server {
+    listen 80;
+    server_name explorer.example.com;
+
+    location / {
+        proxy_pass http://localhost:4175;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+---
+
+## Adding a Store to Explorer
+
+**Note:** Make sure you've enabled Explorer access on the store first (see [Enabling Explorer Access](#enabling-explorer-access-on-a-store)) so Explorer can query the API immediately after being added.
+
+### Method 1: Using Helper Script (Easiest)
+
+```bash
+cd explorer
+./scripts/add-store.sh <store-id> "<store-name>" <base-url> [public-key]
+```
+
+**Example:**
+```bash
+./scripts/add-store.sh main "Main SljivaStore" https://store.example.com/api/explorer
+./scripts/add-store.sh secondary "Secondary Store" https://store2.example.com/api/explorer "public-key-here"
+```
+
+The script automatically:
+- Ensures baseUrl ends with `/api/explorer`
+- Updates `.env.production` (or `.env`)
+- Preserves existing stores
+- Replaces stores with the same ID
+
+### Method 2: Automatic Discovery
+
+If the store exposes `/.well-known/store-info`, you can discover and add it automatically:
+
+```bash
+cd explorer
+./scripts/discover-store.sh https://store.example.com
+```
+
+This will:
+1. Fetch store info from `/.well-known/store-info`
+2. Extract store details (id, name, baseUrl, publicKey)
+3. Automatically add it using `add-store.sh`
+
+### Method 3: Environment Variable (Manual)
+
+Update `EXPLORER_STORES` in your `.env.production`:
+
+```bash
+EXPLORER_STORES='[
+  {
+    "id": "main",
+    "name": "Main SljivaStore",
+    "baseUrl": "https://store1.example.com/api/explorer"
+  },
+  {
+    "id": "secondary",
+    "name": "Secondary Store",
+    "baseUrl": "https://store2.example.com/api/explorer",
+    "description": "Secondary production store"
+  },
+  {
+    "id": "test",
+    "name": "Test Store",
+    "baseUrl": "https://test-store.example.com/api/explorer",
+    "enabled": true
+  }
+]'
+```
+
+**Restart the Explorer server** after updating:
+
+```bash
+# Docker
+docker restart explorer
+
+# Direct Node.js
+# Stop and restart the process
+```
+
+### Method 2: Using Store Discovery (Automatic)
+
+If stores expose `/.well-known/store-info`, Explorer can discover them automatically (see [Store Discovery](#store-discovery)).
+
+### Store Configuration Fields
+
+- `id` (required) - Unique identifier for the store
+- `name` (required) - Human-readable store name
+- `baseUrl` (required) - Full URL to the store's Explorer API endpoint (must end with `/api/explorer`)
+- `publicKey` (optional) - Public key for store verification
+- `description` (optional) - Store description
+- `enabled` (optional) - Whether the store is enabled (default: `true`)
+
+---
+
+## Enabling Explorer Access on a Store
+
+**⚠️ Important: Enable Explorer access BEFORE adding the store to Explorer.**
+
+This ensures Explorer can immediately query the store's API after being added. The discovery endpoint works without CORS, but the actual API routes require it.
+
+To allow Explorer to query your SljivaStore backend, you need to:
+
+### Step 1: Enable CORS for Explorer Routes
+
+**Using Helper Script (Easiest):**
+
+```bash
+cd backend
+./scripts/enable-explorer.sh https://explorer1.example.com https://explorer2.example.com
+```
+
+**Manual Configuration:**
+
+Add to store's `.env.production`:
+
+```bash
+EXPLORER_ORIGINS=https://explorer1.example.com,https://explorer2.example.com
+```
+
+**Note:** CORS support for Explorer routes is already implemented in `server.js`. Just set the `EXPLORER_ORIGINS` environment variable and restart the server.
+
+### Step 2: Expose Store Discovery Endpoint
+
+Ensure `/.well-known/store-info` is accessible (should already be implemented).
+
+### Step 3: Verify Explorer API Routes
+
+The store should expose these routes:
+- `GET /api/explorer/parts/:partHash`
+- `GET /api/explorer/transactions/id/:txId`
+- `GET /api/explorer/transactions/chain/:chainTx`
+- `GET /api/explorer/partial-transactions/part/:partHash`
+- `GET /api/explorer/partial-transactions/id/:txId`
+- `GET /api/explorer/partial-transactions/chain/:chainTx`
+
+### Step 4: Test Connection
+
+From Explorer server, test the connection:
+
+```bash
+# Test store discovery
+curl https://store.example.com/.well-known/store-info
+
+# Test Explorer API
+curl https://store.example.com/api/explorer/stores
+```
+
+---
+
+## Store Discovery
+
+### Automatic Store Discovery
+
+Stores can expose a discovery endpoint at `/.well-known/store-info` that returns:
+
+```json
+{
+  "id": "main",
+  "name": "Main SljivaStore",
+  "baseUrl": "https://store.example.com/api/explorer",
+  "publicKey": "optional-key"
+}
+```
+
+### Using Discovery in Explorer
+
+You can manually add stores discovered via this endpoint, or implement automatic discovery (future feature).
+
+**Manual discovery:**
+
+```bash
+# Get store info
+curl https://store.example.com/.well-known/store-info
+
+# Add to EXPLORER_STORES using the returned baseUrl
+```
+
+---
+
+## Troubleshooting
+
+### Explorer can't connect to store
+
+1. **Check CORS**: Ensure `EXPLORER_ORIGINS` includes Explorer's origin
+2. **Verify baseUrl**: Must end with `/api/explorer`
+3. **Test connectivity**: `curl https://store.example.com/api/explorer/stores`
+4. **Check firewall**: Ensure ports are accessible
+
+### Store not appearing in Explorer
+
+1. **Check JSON syntax**: `EXPLORER_STORES` must be valid JSON
+2. **Restart Explorer**: Changes require server restart
+3. **Check logs**: Look for store configuration errors
+4. **Verify enabled**: Ensure `enabled: true` (or omit the field)
+
+### 404 errors on Explorer API routes
+
+1. **Verify routes exist**: Check store's `backend/routes/explorer.js`
+2. **Check mounting**: Ensure router is mounted at `/api/explorer`
+3. **Test directly**: `curl https://store.example.com/api/explorer/stores`
+
+---
+
+## Security Considerations
+
+1. **CORS**: Only allow specific Explorer origins in production
+2. **Rate Limiting**: Consider adding rate limits to Explorer API routes
+3. **Authentication**: Explorer APIs are read-only, but consider IP whitelisting for sensitive stores
+4. **HTTPS**: Always use HTTPS in production
+
+---
+
+## Quick Reference
+
+### Environment Variables
+
+**Explorer:**
+- `NODE_ENV=production` - Production mode
+- `PORT=4175` - External port
+- `EXPLORER_STORES` - JSON array of stores
+- `MAIN_STORE_PORT=3000` - Default local store port
+
+**Store:**
+- `EXPLORER_ORIGINS` - Comma-separated list of allowed Explorer origins
+- `STORE_ID` - Store identifier
+- `STORE_NAME` - Store display name
+- `STORE_BASE_URL` - Store's base URL (for discovery)
+
+### Common Commands
+
+```bash
+# Build Explorer
+docker build -t explorer .
+
+# Run Explorer
+docker run -d -p 4175:4175 --env-file .env.production explorer
+
+# Check Explorer health
+curl http://localhost:4175/health
+
+# List configured stores
+curl http://localhost:4175/api/explorer/stores
+
+# Test store connection
+curl https://store.example.com/api/explorer/stores
+```
+</file>
+
+<file path="src/lib/components/SearchPanel.svelte">
+<script lang="ts">
+  import type { StoreInfo } from "../types";
+  import { createEventDispatcher } from "svelte";
+
+  export let query = "";
+  export let loading = false;
+  export let error: string | null = null;
+  export let stores: StoreInfo[] = [];
+  export let selectedStoreId: string | null = null;
+  export let onSearch: ((payload: { query: string; storeId?: string | null }) => void) | null = null;
+
+  const dispatch = createEventDispatcher<{
+    search: { query: string; storeId?: string | null };
+  }>();
+
+  $: showStoreSelector = stores.length > 1;
+
+  function handleSubmit(event: Event) {
+    event.preventDefault();
+    if (loading) return;
+    const payload = { query, storeId: selectedStoreId };
+    onSearch?.(payload);
+    dispatch("search", payload);
+  }
+</script>
+
+<form class="search-panel" on:submit={handleSubmit}>
+  <div class="controls">
+    {#if showStoreSelector}
+      <label class="field">
+        <span class="field__label">Store</span>
+        <select bind:value={selectedStoreId} class="field__input" disabled={loading}>
+          <option value={null}>All stores</option>
+          {#each stores as store}
+            <option value={store.id}>{store.name}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
+    <label class="field field--search">
+      <span class="field__label">Search</span>
+      <input
+        class="field__input"
+        type="text"
+        placeholder="Enter hash, transaction ID, or chain hash"
+        bind:value={query}
+        spellcheck="false"
+        autocomplete="off"
+        disabled={loading}
+      />
+    </label>
+  </div>
+  <button class="submit" type="submit" disabled={loading}>
+    {#if loading}
+      Searching…
+    {:else}
+      Search
+    {/if}
+  </button>
+  {#if error}
+    <p class="error">{error}</p>
+  {/if}
+</form>
+
+<style>
+  .search-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.5rem;
+    background-color: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    box-shadow: 0 20px 45px var(--card-shadow);
+    backdrop-filter: blur(10px);
+  }
+
+  .controls {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .field--search {
+    grid-column: 1 / -1;
+  }
+
+  @media (min-width: 600px) {
+    .field--search {
+      grid-column: auto;
+    }
+  }
+
+  .field {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .field__label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .field__input {
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-size: 1rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .field__input:focus {
+    outline: none;
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-shadow);
+  }
+
+  .submit {
+    justify-self: flex-start;
+    padding: 0.85rem 1.8rem;
+    border-radius: 999px;
+    border: none;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: linear-gradient(135deg, var(--button-gradient-start), var(--button-gradient-end));
+    color: var(--button-text);
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  }
+
+  .submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .submit:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 30px var(--button-shadow);
+  }
+
+  .error {
+    margin: 0;
+    color: var(--danger);
+    font-size: 0.95rem;
+  }
+</style>
+</file>
+
+<file path="README.md">
+# Explorer
+
+Standalone Explorer application for searching parts and transactions across the SljivaStore network.
+
+## Structure
+
+- **Frontend**: Svelte + Vite application in `src/`
+- **Backend**: Node.js + Express API server in `server/`
+- **Docs**: Integration guides and API references in `docs/`
+
+## Goals
+
+- Discover parts by hash
+- Look up completed transactions by their transaction id or on-chain hash
+- Enumerate partial transactions for a part or a chain transaction
+- Provide a read-only experience that mirrors the main store data model
+
+## Getting Started
+
+### Prerequisites
+
+See [docs/INSTALLATION.md](./docs/INSTALLATION.md) for complete installation instructions.
+
+**Quick checklist:**
+- Docker (for production) or Node.js 20+ (for development)
+- Git (for cloning repository)
+
+### Installation
+
+```bash
+cd explorer
+npm install
+```
+
+### Development
+
+Run both frontend and backend together:
+```bash
+npm run dev
+```
+
+Or run them separately:
+```bash
+npm run dev:server    # Backend only (port 4176)
+npm run dev:frontend  # Frontend only (port 4175)
+```
+
+### Environment Variables
+
+Create a `.env` file in the repo root:
+
+```env
+EXPLORER_API_PORT=4176
+NODE_ENV=development
+```
+
+For production, use `.env.production`.
+
+### Scripts
+
+- `npm run dev` - Run both backend and frontend in development mode
+- `npm run dev:server` - Run backend only in watch mode
+- `npm run dev:frontend` - Run frontend only
+- `npm run build` - Build frontend for production
+- `npm run preview` - Preview built frontend
+- `npm run start:server` - Run backend in production mode
+- `npm run test` - Run Vitest tests
+
+### Backend API
+
+The backend server runs on port 4176 (configurable via `EXPLORER_API_PORT`) and exposes routes under `/api/explorer`:
+
+- `GET /api/explorer/parts/:partHash`
+- `GET /api/explorer/transactions/id/:txId`
+- `GET /api/explorer/transactions/chain/:chainTx`
+- `GET /api/explorer/partial-transactions/part/:partHash`
+- `GET /api/explorer/partial-transactions/id/:txId`
+- `GET /api/explorer/partial-transactions/chain/:chainTx`
+
+See `server/README.md` for more details.
+
+### Development Proxy
+
+The Vite dev server automatically proxies:
+- `/api/explorer/**` → Explorer backend (localhost:4176)
+- `/api/**` (excluding `/api/explorer`) → Main store backend (localhost:3000)
+
+### AI Workflows
+
+- Run `./orchestrate "Your task"` for AI-assisted development
+- Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks
+- For Docker deployment see `docs/running.md`
+</file>
+
 <file path="src/lib/components/ResultPanel.svelte">
 <script lang="ts">
-  import type { ExplorerResult } from "../types";
+  import type { ExplorerResult, ExplorerNFT } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
+  import PartsList from "./PartsList.svelte";
+  import { getPartLink, getChainTxLink } from "../utils/storeLinks";
+  import { fetchNftMetadata } from "../api";
 
   export let result: ExplorerResult | null = null;
+
+  let transactionNft: ExplorerNFT | null = null;
+
+  // Fetch NFT metadata for transaction
+  $: if (result && result.kind === "transaction") {
+    if (result.nft) {
+      transactionNft = result.nft;
+    } else if (result.transaction.nftId) {
+      // Fetch NFT metadata using transaction's nftId
+      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
+        transactionNft = nft;
+      });
+    } else if (result.parts && result.parts.length > 0) {
+      // Fallback: use first part's parent_hash
+      const firstPart = result.parts[0];
+      if (firstPart && firstPart.parent_hash) {
+        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
+          transactionNft = nft;
+        });
+      }
+    }
+  } else {
+    transactionNft = null;
+  }
 </script>
 
 {#if !result}
@@ -483,7 +3414,16 @@ The app will be available at `http://localhost:4175`.
         <dl>
           <div>
             <dt>Part Hash</dt>
-            <dd>{result.part._id}</dd>
+            <dd>
+              <a
+                href={getPartLink(result.part._id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="part-link"
+              >
+                {result.part._id}
+              </a>
+            </dd>
           </div>
           <div>
             <dt>Part Number</dt>
@@ -501,6 +3441,12 @@ The app will be available at `http://localhost:4175`.
             <dt>Listing</dt>
             <dd>{result.part.listing ?? "Not Listed"}</dd>
           </div>
+          {#if result.part.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.part.storeName}</dd>
+            </div>
+          {/if}
         </dl>
       </div>
       {#if result.nft}
@@ -552,8 +3498,25 @@ The app will be available at `http://localhost:4175`.
             <dd>{result.transaction._id}</dd>
           </div>
           <div>
+            <dt>Type</dt>
+            <dd>{result.transaction.type || "TRANSACTION"}</dd>
+          </div>
+          <div>
             <dt>Chain Hash</dt>
-            <dd>{result.transaction.chainTx}</dd>
+            <dd>
+              {#if result.transaction.chainTx}
+                <a
+                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.chainTx)}
+                </a>
+              {:else}
+                —
+              {/if}
+            </dd>
           </div>
           <div>
             <dt>Buyer</dt>
@@ -575,15 +3538,49 @@ The app will be available at `http://localhost:4175`.
             <dt>Timestamp</dt>
             <dd>{formatDate(result.transaction.timestamp)}</dd>
           </div>
+          {#if result.transaction.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.transaction.storeName}</dd>
+            </div>
+          {/if}
         </dl>
       </div>
-      <div class="card note-card">
-        <h3>Partial Transactions</h3>
-        <p>
-          Partial transfers for this transaction are omitted to keep the Explorer responsive.
-          Use the part hash search to inspect individual partial movements.
-        </p>
-      </div>
+      {#if transactionNft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if transactionNft.imageurl}
+            <figure>
+              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
+              <figcaption>{transactionNft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{transactionNft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{transactionNft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(transactionNft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      {#if result.parts && result.parts.length > 0}
+        <PartsList parts={result.parts} pagination={result.pagination} />
+      {:else}
+        <div class="card note-card">
+          <h3>Parts</h3>
+          <p>No parts found for this transaction.</p>
+        </div>
+      {/if}
     </div>
   </section>
 {/if}
@@ -698,336 +3695,28 @@ The app will be available at `http://localhost:4175`.
     margin: 0;
     color: var(--text-muted);
   }
-</style>
-</file>
 
-<file path="src/lib/components/SearchPanel.svelte">
-<script lang="ts">
-  import type { SearchMode } from "../types";
-  import { createEventDispatcher } from "svelte";
-
-  const modes: { value: SearchMode; label: string; placeholder: string }[] = [
-    { value: "part", label: "Part Hash", placeholder: "Enter part hash" },
-    {
-      value: "transaction",
-      label: "Transaction (ID or Chain Hash)",
-      placeholder: "Enter transaction id or chain hash"
-    }
-  ];
-
-  export let mode: SearchMode = "part";
-  export let query = "";
-  export let loading = false;
-  export let error: string | null = null;
-  export let onSearch: ((payload: { mode: SearchMode; query: string }) => void) | null = null;
-
-  const dispatch = createEventDispatcher<{
-    search: { mode: SearchMode; query: string };
-    modeChange: { mode: SearchMode };
-  }>();
-
-  function handleSubmit(event: Event) {
-    event.preventDefault();
-    if (loading) return;
-    const payload = { mode, query };
-    onSearch?.(payload);
-    dispatch("search", payload);
+  .part-link,
+  .chain-tx-link {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
   }
 
-  function handleModeChange(event: Event) {
-    const target = event.target as HTMLSelectElement | null;
-    if (!target) return;
-    const next = target.value as SearchMode;
-    mode = next;
-    dispatch("modeChange", { mode });
-  }
-</script>
-
-<form class="search-panel" on:submit={handleSubmit}>
-  <div class="controls">
-    <label class="field">
-      <span class="field__label">Search type</span>
-      <select bind:value={mode} class="field__input" on:change={handleModeChange} disabled={loading}>
-        {#each modes as item}
-          <option value={item.value}>
-            {item.label}
-          </option>
-        {/each}
-      </select>
-    </label>
-    <label class="field">
-      <span class="field__label">Value</span>
-      <input
-        class="field__input"
-        type="text"
-        placeholder={modes.find((item) => item.value === mode)?.placeholder}
-        bind:value={query}
-        spellcheck="false"
-        autocomplete="off"
-        disabled={loading}
-      />
-    </label>
-  </div>
-  <button class="submit" type="submit" disabled={loading}>
-    {#if loading}
-      Searching…
-    {:else}
-      Search
-    {/if}
-  </button>
-  {#if error}
-    <p class="error">{error}</p>
-  {/if}
-</form>
-
-<style>
-  .search-panel {
-    display: grid;
-    gap: 1rem;
-    padding: 1.5rem;
-    background-color: var(--card-bg);
-    border-radius: 1rem;
-    border: 1px solid var(--card-border);
-    box-shadow: 0 20px 45px var(--card-shadow);
-    backdrop-filter: blur(10px);
-  }
-
-  .controls {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  }
-
-  .field {
-    display: grid;
-    gap: 0.5rem;
-  }
-
-  .field__label {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-label);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .field__input {
-    padding: 0.75rem 1rem;
-    border-radius: 0.75rem;
-    border: 1px solid var(--input-border);
-    background: var(--input-bg);
-    color: var(--text-primary);
-    font-size: 1rem;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  }
-
-  .field__input:focus {
-    outline: none;
-    border-color: var(--accent-border);
-    box-shadow: 0 0 0 3px var(--accent-shadow);
-  }
-
-  .submit {
-    justify-self: flex-start;
-    padding: 0.85rem 1.8rem;
-    border-radius: 999px;
-    border: none;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    background: linear-gradient(135deg, var(--button-gradient-start), var(--button-gradient-end));
-    color: var(--button-text);
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  }
-
-  .submit:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .submit:not(:disabled):hover {
-    transform: translateY(-1px);
-    box-shadow: 0 10px 30px var(--button-shadow);
-  }
-
-  .error {
-    margin: 0;
-    color: var(--danger);
-    font-size: 0.95rem;
+  .part-link:hover,
+  .chain-tx-link:hover {
+    text-decoration: underline;
   }
 </style>
-</file>
-
-<file path="src/lib/utils/format.ts">
-export function formatAddress(value: string, length = 6): string {
-  if (!value) return "";
-  const start = value.slice(0, length + 2);
-  const end = value.slice(-length);
-  return `${start}…${end}`;
-}
-
-export function formatDate(value: string): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
-}
-
-export function formatAmount(amount: string, currency: string): string {
-  const numeric = Number.parseFloat(amount);
-  if (Number.isNaN(numeric)) {
-    return `${amount} ${currency}`;
-  }
-  return `${numeric.toFixed(4)} ${currency.toUpperCase()}`;
-}
-</file>
-
-<file path="src/lib/api.ts">
-import type {
-  ExplorerResult,
-  ExplorerTransaction,
-  ExplorerPart,
-  ExplorerNFT,
-  PartialTransaction,
-  SearchMode
-} from "./types";
-
-const DEFAULT_BASE = "/api/explorer";
-const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
-const NFT_BASE = "/api/nfts";
-
-interface PartResponse {
-  part: ExplorerPart;
-  partialTransactions: PartialTransaction[];
-  pagination?: {
-    total: number;
-    skip: number;
-    limit: number;
-  };
-}
-
-interface TransactionResponse {
-  transaction: ExplorerTransaction;
-  partialTransactions: PartialTransaction[];
-  pagination?: {
-    total: number;
-    skip: number;
-    limit: number;
-  };
-}
-
-async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
-  const url = `${API_BASE}${path}${query}`;
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!response.ok) {
-    const message = await parseError(response);
-    throw new Error(message);
-  }
-
-  return (await response.json()) as T;
-}
-
-async function parseError(response: Response): Promise<string> {
-  try {
-    const data = await response.json();
-    if (typeof data?.error === "string") {
-      return data.error;
-    }
-  } catch {
-    // ignore
-  }
-  return `Request failed with status ${response.status}`;
-}
-
-async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
-  if (!nftId) return null;
-  const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  try {
-    const data = (await response.json()) as ExplorerNFT;
-    return {
-      ...data,
-      partialTransactions: data.partialTransactions ?? [],
-      pagination: data.pagination ?? null
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function searchExplorer(
-  mode: SearchMode,
-  query: string,
-  options: { page?: number; pageSize?: number } = {}
-): Promise<ExplorerResult> {
-  const sanitized = query.trim();
-  if (!sanitized) {
-    throw new Error("Please enter a value to search.");
-  }
-
-  const page = Math.max(0, options.page ?? 0);
-  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
-  const paginationParams = {
-    skip: String(page * pageSize),
-    limit: String(pageSize),
-  };
-
-  switch (mode) {
-    case "part": {
-      const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
-      const nft = await fetchNftMetadata(data.part.parent_hash);
-      return {
-        kind: "part",
-        part: data.part,
-        nft,
-        partialTransactions: data.partialTransactions,
-        pagination: data.pagination ?? {
-          total: data.partialTransactions.length,
-          skip: page * pageSize,
-          limit: pageSize
-        }
-      };
-    }
-    case "transaction": {
-      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
-      const path = isObjectId
-        ? `/transactions/id/${encodeURIComponent(sanitized)}`
-        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
-      const data = await request<TransactionResponse>(path, paginationParams);
-      return {
-        kind: "transaction",
-        transaction: data.transaction,
-        partialTransactions: data.partialTransactions ?? [],
-        pagination: null
-      };
-    }
-    default: {
-      const exhaustive: never = mode;
-      throw new Error(`Unsupported search mode: ${exhaustive}`);
-    }
-  }
-}
 </file>
 
 <file path="src/lib/types.ts">
 export type SearchMode = "part" | "transaction";
+
+export interface StoreInfo {
+  id: string;
+  name: string;
+}
 
 export interface ExplorerPart {
   _id: string;
@@ -1035,6 +3724,8 @@ export interface ExplorerPart {
   parent_hash: string;
   owner: string;
   listing: string | null;
+  storeId?: string;
+  storeName?: string;
 }
 
 export interface ExplorerNFT {
@@ -1062,10 +3753,13 @@ export interface PartialTransaction {
   currency: string;
   amount: string;
   timestamp: string;
+  storeId?: string;
+  storeName?: string;
 }
 
 export interface ExplorerTransaction {
   _id: string;
+  type: "TRANSACTION" | "GIFT" | "MINT";
   listingId: string;
   reservationId: string;
   buyer: string;
@@ -1076,6 +3770,8 @@ export interface ExplorerTransaction {
   currency: string;
   amount: string;
   timestamp: string;
+  storeId?: string;
+  storeName?: string;
 }
 
 export type ExplorerResult =
@@ -1089,90 +3785,11 @@ export type ExplorerResult =
   | {
       kind: "transaction";
       transaction: ExplorerTransaction;
+      parts?: ExplorerPart[];
+      nft?: ExplorerNFT | null;
       partialTransactions: PartialTransaction[];
       pagination: Pagination | null;
     };
-</file>
-
-<file path="src/app.css">
-:root {
-  color-scheme: dark;
-  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --bg-start: #0f172a;
-  --bg-end: #1e293b;
-  --text-primary: #f8fafc;
-  --text-secondary: rgba(226, 232, 240, 0.85);
-  --text-muted: rgba(226, 232, 240, 0.75);
-  --text-label: rgba(148, 163, 184, 0.9);
-  --card-bg: rgba(15, 23, 42, 0.72);
-  --card-border: rgba(148, 163, 184, 0.35);
-  --card-shadow: rgba(15, 23, 42, 0.35);
-  --input-bg: rgba(15, 23, 42, 0.75);
-  --input-border: rgba(148, 163, 184, 0.35);
-  --accent-border: rgba(94, 234, 212, 0.5);
-  --accent-shadow: rgba(45, 212, 191, 0.2);
-  --button-gradient-start: #0ea5e9;
-  --button-gradient-end: #22d3ee;
-  --button-text: #0f172a;
-  --button-shadow: rgba(34, 211, 238, 0.35);
-  --badge-bg: rgba(56, 189, 248, 0.2);
-  --badge-text: #38bdf8;
-  --border-muted: rgba(148, 163, 184, 0.35);
-  --image-border: rgba(148, 163, 184, 0.25);
-  --accent: #22d3ee;
-  --danger: #f87171;
-  --table-header-bg: rgba(51, 65, 85, 0.6);
-  --table-row-alt: rgba(148, 163, 184, 0.05);
-}
-
-body.light-theme {
-  color-scheme: light;
-  --bg-start: #f8fafc;
-  --bg-end: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: rgba(30, 41, 59, 0.85);
-  --text-muted: rgba(30, 41, 59, 0.6);
-  --text-label: rgba(30, 41, 59, 0.7);
-  --card-bg: rgba(255, 255, 255, 0.92);
-  --card-border: rgba(148, 163, 184, 0.4);
-  --card-shadow: rgba(15, 23, 42, 0.12);
-  --input-bg: rgba(255, 255, 255, 1);
-  --input-border: rgba(148, 163, 184, 0.45);
-  --accent-border: rgba(14, 165, 233, 0.35);
-  --accent-shadow: rgba(14, 165, 233, 0.2);
-  --button-text: #0f172a;
-  --button-shadow: rgba(14, 165, 233, 0.3);
-  --badge-bg: rgba(14, 165, 233, 0.12);
-  --badge-text: #0369a1;
-  --border-muted: rgba(148, 163, 184, 0.45);
-  --image-border: rgba(148, 163, 184, 0.4);
-  --accent: #0284c7;
-  --danger: #dc2626;
-  --table-header-bg: rgba(226, 232, 240, 0.85);
-  --table-row-alt: rgba(148, 163, 184, 0.12);
-}
-
-body {
-  margin: 0;
-  min-height: 100vh;
-  background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
-  color: var(--text-primary);
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-button {
-  font: inherit;
-}
-</file>
-
-<file path="src/app.d.ts">
-/// <reference types="svelte" />
-/// <reference types="vite/client" />
 </file>
 
 <file path="src/App.svelte">
@@ -1180,12 +3797,11 @@ button {
   import { onMount } from "svelte";
   import SearchPanel from "./lib/components/SearchPanel.svelte";
   import ResultPanel from "./lib/components/ResultPanel.svelte";
-  import type { ExplorerResult, SearchMode, Pagination } from "./lib/types";
-  import { searchExplorer } from "./lib/api";
+  import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
+  import { unifiedSearch, fetchStores } from "./lib/api";
 
   const pageSize = 50;
 
-  let mode: SearchMode = "part";
   let query = "";
   let loading = false;
   let error: string | null = null;
@@ -1193,8 +3809,20 @@ button {
   let pagination: Pagination | null = null;
   let currentPage = 0;
   let theme: "dark" | "light" = "dark";
+  let stores: StoreInfo[] = [];
+  let selectedStoreId: string | null = null;
 
-  async function executeSearch(targetMode: SearchMode, value: string, page = 0) {
+  onMount(async () => {
+    applyTheme();
+    try {
+      stores = await fetchStores();
+    } catch (err) {
+      console.error("Failed to fetch stores:", err);
+      // Continue with empty stores array - will default to "all stores"
+    }
+  });
+
+  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
     const input = value.trim();
     if (!input) {
       error = "Please enter a value to search.";
@@ -1207,7 +3835,11 @@ button {
     error = null;
 
     try {
-      const data = await searchExplorer(targetMode, input, { page, pageSize });
+      const data = await unifiedSearch(input, { 
+        page, 
+        pageSize,
+        storeId: storeId || undefined
+      });
       result = data;
       pagination = data.pagination;
       currentPage = page;
@@ -1220,17 +3852,10 @@ button {
     }
   }
 
-  async function handleSearch(event: CustomEvent<{ mode: SearchMode; query: string }>) {
-    mode = event.detail.mode;
+  async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
     query = event.detail.query;
-    await executeSearch(mode, query, 0);
-  }
-
-  function handleModeChange(event: CustomEvent<{ mode: SearchMode }>) {
-    mode = event.detail.mode;
-    error = null;
-    pagination = null;
-    currentPage = 0;
+    selectedStoreId = event.detail.storeId ?? null;
+    await executeSearch(query, 0, selectedStoreId);
   }
 
   function totalPages() {
@@ -1242,7 +3867,7 @@ button {
     if (!pagination) return;
     const pages = totalPages();
     if (page < 0 || page >= pages) return;
-    await executeSearch(mode, query, page);
+    await executeSearch(query, page, selectedStoreId);
   }
 
   function toggleTheme() {
@@ -1254,24 +3879,17 @@ button {
     document.body.classList.toggle("light-theme", theme === "light");
   }
 
-  onMount(() => {
-    applyTheme();
-  });
 </script>
 
 <main class="app">
   <header class="hero">
     <div class="hero__text">
-      <h1>SljivaStore Explorer</h1>
+      <h1>NFT Explorer</h1>
       <p class="subtitle">
-        Search parts, transactions, and partial transfers across the network.
+        Search transactions across the network.
       </p>
     </div>
     <div class="hero__actions">
-      <div class="status">
-        <span class="status__dot"></span>
-        <span>Connected to backend</span>
-      </div>
       <button class="theme-toggle" type="button" on:click={toggleTheme}>
         {theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
       </button>
@@ -1279,12 +3897,12 @@ button {
   </header>
 
   <SearchPanel
-    bind:mode
     bind:query
     {loading}
     {error}
+    {stores}
+    bind:selectedStoreId
     on:search={handleSearch}
-    on:modeChange={handleModeChange}
   />
 
   <ResultPanel {result} />
@@ -1368,24 +3986,6 @@ button {
     flex-wrap: wrap;
   }
 
-  .status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.9rem;
-    color: var(--text-label);
-    font-weight: 500;
-  }
-
-  .status__dot {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: radial-gradient(circle at center, #34d399 0, #10b981 60%, rgba(16, 185, 129, 0) 100%);
-    box-shadow: 0 0 12px rgba(45, 212, 191, 0.45);
-  }
-
   .theme-toggle {
     padding: 0.75rem 1.4rem;
     border-radius: 999px;
@@ -1434,365 +4034,1163 @@ button {
 </style>
 </file>
 
-<file path="src/main.ts">
-import "./app.css";
-import App from "./App.svelte";
-import { mount } from "svelte";
+<file path="server/routes/explorer.ts">
+/**
+ * Explorer API Routes
+ * 
+ * Aggregator routes that query one or more SljivaStore backends.
+ */
 
-const target = document.getElementById("app");
+import express from "express";
+import { getStores, getStoreById } from "../config/stores.js";
+import { queryStore, queryStores } from "../utils/storeClient.js";
 
-if (!target) {
-  throw new Error("Root element #app not found");
+const router = express.Router();
+
+/**
+ * GET /api/explorer/stores
+ * 
+ * Get list of configured stores.
+ */
+router.get("/stores", (req, res) => {
+  try {
+    const stores = getStores();
+    res.json(
+      stores.map(store => ({
+        id: store.id,
+        name: store.name
+      }))
+    );
+  } catch (err) {
+    console.error("[Explorer API] Error in /stores:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+/**
+ * Helper to parse pagination query params.
+ */
+function parsePagination(query: express.Request["query"]) {
+  const limit = Math.max(1, Math.min(100, parseInt(String(query.limit ?? "50"), 10) || 50));
+  const page = Math.max(0, parseInt(String(query.page ?? "0"), 10) || 0);
+  const skip = Math.max(0, parseInt(String(query.skip ?? String(page * limit)), 10) || page * limit);
+  return { skip, limit, page };
 }
 
-export default mount(App, {
-  target
-});
-</file>
-
-<file path="tests/api.test.ts">
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchExplorer } from "../src/lib/api";
-
-function mockResponse(response: unknown, ok = true) {
+/**
+ * Add store metadata to a part object.
+ */
+function enrichPart(part: any, storeId: string, storeName: string) {
   return {
-    ok,
-    json: vi.fn().mockResolvedValue(response),
-    status: ok ? 200 : 500
+    ...part,
+    storeId,
+    storeName
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-describe("searchExplorer", () => {
-  it("fetches part data", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          mockResponse({
-            part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
-            partialTransactions: [],
-            pagination: { total: 1, skip: 0, limit: 50 }
-          })
-        )
-        .mockResolvedValueOnce(
-          mockResponse({
-            _id: "nft",
-            name: "Test NFT",
-            description: "Desc",
-            creator: "0xabc",
-            imageurl: "https://example.com/img.png"
-          })
-        )
-    );
-
-    const result = await searchExplorer("part", "hash");
-    expect(result.kind).toBe("part");
-    if (result.kind === "part") {
-      expect(result.part._id).toBe("hash");
-      expect(result.nft?.imageurl).toBe("https://example.com/img.png");
-    }
-  });
-
-  it("throws on error response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        json: vi.fn().mockResolvedValue({ error: "Not found" })
-      })
-    );
-
-    await expect(searchExplorer("part", "missing")).rejects.toThrow("Not found");
-  });
-});
-</file>
-
-<file path="tests/SearchPanel.test.ts">
-import { fireEvent, render } from "@testing-library/svelte";
-import { describe, expect, it, vi } from "vitest";
-import SearchPanel from "../src/lib/components/SearchPanel.svelte";
-
-describe("SearchPanel", () => {
-  it("emits search event with current mode and query", async () => {
-    const onSearch = vi.fn();
-    const { getByLabelText, getByText } = render(SearchPanel, {
-      props: {
-        mode: "part",
-        query: "",
-        onSearch
-      }
-    });
-
-    const input = getByLabelText("Value") as HTMLInputElement;
-    await fireEvent.input(input, { target: { value: "part-hash" } });
-
-    const submit = getByText("Search");
-    await fireEvent.click(submit);
-
-    expect(onSearch).toHaveBeenCalledWith({ mode: "part", query: "part-hash" });
-  });
-
-  it("disables controls while loading", () => {
-    const { getByText } = render(SearchPanel, {
-      props: {
-        mode: "part",
-        query: "",
-        loading: true
-      }
-    });
-
-    const submit = getByText("Searching…") as HTMLButtonElement;
-    expect(submit).toBeDisabled();
-  });
-});
-</file>
-
-<file path=".cursorrules">
-# Cursor AI Rules for Explorer
-
-## Context Source Priority
-- Always inspect `../orch_ai_strator/context/repomix-output.xml` first for
-  backend details.
-- Consult the docs in `./docs` for Explorer-specific constraints before
-  reading source files.
-
-## Explorer Constraints
-- Explorer is read-only: never mutate backend data.
-- All data comes from SljivaStore backend APIs described in the docs.
-- Use the `/api/explorer/*` routes for search operations.
-
-## Workflow
-1. Understand the feature request.
-2. Review Explorer docs to capture domain context.
-3. Only read or edit files under `explorer/` unless instructed otherwise.
-</file>
-
-<file path=".gitignore">
-node_modules/
-.svelte-kit/
-.vite/
-build/
-dist/
-.env*
-.DS_Store
-</file>
-
-<file path="Dockerfile">
-#
-# Multi-stage build for Explorer frontend
-#
-
-FROM node:20-alpine AS build
-
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm install --frozen-lockfile
-
-COPY . .
-RUN npm run build
-
-FROM node:20-alpine AS runtime
-
-WORKDIR /app
-
-# Serve with a minimal Node static server
-RUN npm install --global serve@14.2.0
-
-COPY --from=build /app/dist ./dist
-
-EXPOSE 4175
-
-CMD ["serve", "-s", "dist", "-l", "4175"]
-</file>
-
-<file path="index.html">
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SljivaStore Explorer</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
-</html>
-</file>
-
-<file path="orchestrate">
-#!/bin/bash
-
-# Orch AI Strator entrypoint for the Explorer project.
-
-if [ $# -eq 0 ]; then
-  echo "🎭 Explorer Orch AI Strator"
-  echo ""
-  echo "Usage: $0 \"Your request here\""
-  echo ""
-  echo "Example:"
-  echo "  $0 \"Bootstrap Explorer search page\""
-  echo ""
-  exit 0
-fi
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-echo "🎭 Explorer Orch AI Strator Processing: $*"
-echo ""
-
-# Reuse the root Orch AI Strator since it already understands the repo structure.
-cd "${SCRIPT_DIR}/../orch_ai_strator"
-node scripts/orchestrate-mock.js "$*"
-</file>
-
-<file path="package.json">
-{
-  "name": "explorer",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite dev --host 0.0.0.0 --port 4175",
-    "build": "vite build",
-    "preview": "vite preview --port 4175",
-    "test": "vitest"
-  },
-  "dependencies": {
-    "svelte": "^5.38.1"
-  },
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
-    "@tsconfig/svelte": "^5.0.2",
-    "@types/node": "^20.12.12",
-    "jsdom": "^24.0.0",
-    "svelte-check": "^4.0.0",
-    "tslib": "^2.6.2",
-    "typescript": "^5.0.0",
-    "vite": "^6.3.5",
-    "vitest": "^3.2.4",
-    "@testing-library/svelte": "^5.0.0",
-    "@testing-library/jest-dom": "^6.4.2",
-    "@sveltejs/vite-plugin-svelte-inspector": "^4.0.1"
-  }
-}
-</file>
-
-<file path="README.md">
-# Explorer Frontend
-
-This directory will host the standalone Explorer application. The Explorer is
-responsible for searching parts and transactions across the SljivaStore network.
-
-## Goals
-
-- Discover parts by hash
-- Look up completed transactions by their transaction id or on-chain hash
-- Enumerate partial transactions for a part or a chain transaction
-- Provide a read-only experience that mirrors the main store data model
-
-## Getting Started
-
-```bash
-cd explorer
-npm install
-npm run dev         # starts Vite on http://localhost:4175 with /api proxy
-npm run test        # runs Vitest (jsdom)
-npm run build       # creates production bundle in dist/
-npm run preview     # serves built bundle locally
-```
-
-- Run `./orchestrate "Your task"` for AI workflows.
-- Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks.
-- For Docker deployment see `docs/running.md`.
-
-The Explorer is read-only and reuses the main SljivaStore backend through the
-`/api/explorer/*` endpoints.
-</file>
-
-<file path="svelte.config.js">
-import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
-
-export default {
-  preprocess: vitePreprocess(),
-  compilerOptions: {
-    dev: process.env.NODE_ENV !== "production"
-  }
-};
-</file>
-
-<file path="tsconfig.json">
-{
-  "extends": "@tsconfig/svelte/tsconfig.json",
-  "compilerOptions": {
-    "moduleResolution": "bundler",
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "verbatimModuleSyntax": true,
-    "allowJs": true,
-    "types": ["vite/client"]
-  },
-  "include": ["src/**/*", "vite.config.ts", "svelte.config.js"]
-}
-</file>
-
-<file path="vite.config.ts">
-import { defineConfig, loadEnv } from "vite";
-import { svelte } from "@sveltejs/vite-plugin-svelte";
-
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const backendUrl = env.VITE_BACKEND_URL || "http://localhost:3000";
-
+/**
+ * Add store metadata to a transaction object.
+ */
+function enrichTransaction(transaction: any, storeId: string, storeName: string) {
   return {
-    plugins: [svelte()],
-    server: {
-      port: 4175,
-      proxy: {
-        "/api": {
-          target: backendUrl,
-          changeOrigin: true,
-          secure: false
+    ...transaction,
+    storeId,
+    storeName
+  };
+}
+
+/**
+ * Add store metadata to partial transactions.
+ */
+function enrichPartialTransactions(
+  partials: any[],
+  storeId: string,
+  storeName: string
+) {
+  return partials.map(p => ({
+    ...p,
+    storeId,
+    storeName
+  }));
+}
+
+/**
+ * GET /api/explorer/parts/:partHash
+ * 
+ * Look up a part by hash across one or all stores.
+ */
+router.get("/parts/:partHash", async (req, res) => {
+  try {
+    const { partHash } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      // Query single store
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        part: any;
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(store, `/parts/${encodeURIComponent(partHash)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Part not found" });
+      }
+
+      const { part, partialTransactions, pagination } = response.data;
+
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (part?.parent_hash) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(part.parent_hash)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${part.parent_hash}:`, err);
         }
       }
-    },
-    preview: {
-      port: 4175
-    },
-    build: {
-      outDir: "dist"
+
+      res.json({
+        part: enrichPart(part, response.storeId, response.storeName),
+        nft,
+        partialTransactions: enrichPartialTransactions(
+          partialTransactions,
+          response.storeId,
+          response.storeName
+        ),
+        pagination: pagination ?? {
+          total: partialTransactions.length,
+          skip,
+          limit
+        }
+      });
+    } else {
+      // Query all stores in parallel
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        part: any;
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(stores, `/parts/${encodeURIComponent(partHash)}`, queryParams);
+
+      const results: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { part, partialTransactions, pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (part?.parent_hash) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(part.parent_hash)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${part.parent_hash}:`, err);
+            }
+          }
+          
+          results.push({
+            part: enrichPart(part, response.storeId, response.storeName),
+            nft,
+            partialTransactions: enrichPartialTransactions(
+              partialTransactions,
+              response.storeId,
+              response.storeName
+            ),
+            pagination: pagination ?? {
+              total: partialTransactions.length,
+              skip,
+              limit
+            }
+          });
+        }
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          error: "Part not found in any store",
+          errors: errors.length > 0 ? errors : undefined
+        });
+      }
+
+      // If multiple results, merge them (for now, return first successful result)
+      // In future, could aggregate/merge results from multiple stores
+      const firstResult = results[0];
+      const allPartials = results.flatMap(r => r.partialTransactions);
+
+      res.json({
+        part: firstResult.part,
+        nft: firstResult.nft,
+        partialTransactions: allPartials,
+        pagination: {
+          total: allPartials.length,
+          skip,
+          limit
+        },
+        ...(errors.length > 0 && { errors })
+      });
     }
-  };
-});
-</file>
-
-<file path="vitest.config.ts">
-import { defineConfig } from "vitest/config";
-import { svelte } from "@sveltejs/vite-plugin-svelte";
-
-export default defineConfig({
-  plugins: [svelte()],
-  resolve: {
-    conditions: ["browser", "development"],
-    dedupe: ["svelte"]
-  },
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./vitest.setup.ts"]
+  } catch (err) {
+    console.error("[Explorer API] Error in /parts/:partHash:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
   }
 });
+
+/**
+ * GET /api/explorer/transactions/id/:txId
+ * 
+ * Look up a transaction by database ID.
+ */
+router.get("/transactions/id/:txId", async (req, res) => {
+  try {
+    const { txId } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        transaction: any;
+        parts?: any[];
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number } | null;
+      }>(store, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Transaction not found" });
+      }
+
+      const { transaction, parts = [], partialTransactions, pagination } = response.data;
+
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (transaction?.nftId) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+        }
+      }
+
+      res.json({
+        transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+        parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+        nft,
+        partialTransactions: [],
+        pagination: pagination ?? null
+      });
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        transaction: any;
+        parts?: any[];
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number } | null;
+      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
+
+      const results: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { transaction, parts = [], pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (transaction?.nftId) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+            }
+          }
+          
+          results.push({
+            transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+            parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+            nft,
+            partialTransactions: [],
+            pagination: pagination ?? null
+          });
+        }
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          error: "Transaction not found in any store",
+          errors: errors.length > 0 ? errors : undefined
+        });
+      }
+
+      const firstResult = results[0];
+      res.json({
+        ...firstResult,
+        ...(errors.length > 0 && { errors })
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /transactions/id/:txId:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+/**
+ * GET /api/explorer/transactions/chain/:chainTx
+ * 
+ * Look up a transaction by chain hash.
+ */
+router.get("/transactions/chain/:chainTx", async (req, res) => {
+  try {
+    const { chainTx } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        transaction: any;
+        parts?: any[];
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number } | null;
+      }>(store, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Transaction not found" });
+      }
+
+      const { transaction, parts = [], partialTransactions, pagination } = response.data;
+
+      // Fetch NFT metadata from the store
+      let nft = null;
+      if (transaction?.nftId) {
+        try {
+          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (nftResponse.ok) {
+            nft = await nftResponse.json();
+          }
+        } catch (err) {
+          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+        }
+      }
+
+      res.json({
+        transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+        parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+        nft,
+        partialTransactions: [],
+        pagination: pagination ?? null
+      });
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        transaction: any;
+        parts?: any[];
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number } | null;
+      }>(stores, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+
+      const results: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { transaction, parts = [], pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (transaction?.nftId) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+            }
+          }
+          
+          results.push({
+            transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+            parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+            nft,
+            partialTransactions: [],
+            pagination: pagination ?? null
+          });
+        }
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          error: "Transaction not found in any store",
+          errors: errors.length > 0 ? errors : undefined
+        });
+      }
+
+      const firstResult = results[0];
+      res.json({
+        ...firstResult,
+        ...(errors.length > 0 && { errors })
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /transactions/chain/:chainTx:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+/**
+ * GET /api/explorer/partial-transactions/part/:partHash
+ * 
+ * Fetch partial transactions for a part.
+ */
+router.get("/partial-transactions/part/:partHash", async (req, res) => {
+  try {
+    const { partHash } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(store, `/partial-transactions/part/${encodeURIComponent(partHash)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Partial transactions not found" });
+      }
+
+      const { partialTransactions, pagination } = response.data;
+
+      res.json({
+        partialTransactions: enrichPartialTransactions(
+          partialTransactions,
+          response.storeId,
+          response.storeName
+        ),
+        pagination: pagination ?? {
+          total: partialTransactions.length,
+          skip,
+          limit
+        }
+      });
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(stores, `/partial-transactions/part/${encodeURIComponent(partHash)}`, queryParams);
+
+      const allPartials: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { partialTransactions } = response.data;
+          allPartials.push(
+            ...enrichPartialTransactions(
+              partialTransactions,
+              response.storeId,
+              response.storeName
+            )
+          );
+        }
+      }
+
+      res.json({
+        partialTransactions: allPartials,
+        pagination: {
+          total: allPartials.length,
+          skip,
+          limit
+        },
+        ...(errors.length > 0 && { errors })
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /partial-transactions/part/:partHash:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+/**
+ * GET /api/explorer/partial-transactions/id/:txId
+ * 
+ * Fetch partial transactions for a transaction ID.
+ */
+router.get("/partial-transactions/id/:txId", async (req, res) => {
+  try {
+    const { txId } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(store, `/partial-transactions/id/${encodeURIComponent(txId)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Partial transactions not found" });
+      }
+
+      const { partialTransactions, pagination } = response.data;
+
+      res.json({
+        partialTransactions: enrichPartialTransactions(
+          partialTransactions,
+          response.storeId,
+          response.storeName
+        ),
+        pagination: pagination ?? {
+          total: partialTransactions.length,
+          skip,
+          limit
+        }
+      });
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(stores, `/partial-transactions/id/${encodeURIComponent(txId)}`, queryParams);
+
+      const allPartials: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { partialTransactions } = response.data;
+          allPartials.push(
+            ...enrichPartialTransactions(
+              partialTransactions,
+              response.storeId,
+              response.storeName
+            )
+          );
+        }
+      }
+
+      res.json({
+        partialTransactions: allPartials,
+        pagination: {
+          total: allPartials.length,
+          skip,
+          limit
+        },
+        ...(errors.length > 0 && { errors })
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /partial-transactions/id/:txId:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+/**
+ * GET /api/explorer/partial-transactions/chain/:chainTx
+ * 
+ * Fetch partial transactions for a chain transaction hash.
+ */
+router.get("/partial-transactions/chain/:chainTx", async (req, res) => {
+  try {
+    const { chainTx } = req.params;
+    const { skip, limit } = parsePagination(req.query);
+    const storeId = req.query.storeId as string | undefined;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
+
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
+
+      const response = await queryStore<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(store, `/partial-transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+
+      if (response.error) {
+        return res.status(502).json({
+          error: `Store '${storeId}' error: ${response.error}`,
+          storeId: response.storeId,
+          storeName: response.storeName
+        });
+      }
+
+      if (!response.data) {
+        return res.status(404).json({ error: "Partial transactions not found" });
+      }
+
+      const { partialTransactions, pagination } = response.data;
+
+      res.json({
+        partialTransactions: enrichPartialTransactions(
+          partialTransactions,
+          response.storeId,
+          response.storeName
+        ),
+        pagination: pagination ?? {
+          total: partialTransactions.length,
+          skip,
+          limit
+        }
+      });
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
+      }
+
+      const responses = await queryStores<{
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number };
+      }>(stores, `/partial-transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+
+      const allPartials: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
+        }
+
+        if (response.data) {
+          const { partialTransactions } = response.data;
+          allPartials.push(
+            ...enrichPartialTransactions(
+              partialTransactions,
+              response.storeId,
+              response.storeName
+            )
+          );
+        }
+      }
+
+      res.json({
+        partialTransactions: allPartials,
+        pagination: {
+          total: allPartials.length,
+          skip,
+          limit
+        },
+        ...(errors.length > 0 && { errors })
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /partial-transactions/chain/:chainTx:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
+export default router;
 </file>
 
-<file path="vitest.setup.ts">
-import "@testing-library/jest-dom";
+<file path="src/lib/api.ts">
+import type {
+  ExplorerResult,
+  ExplorerTransaction,
+  ExplorerPart,
+  ExplorerNFT,
+  PartialTransaction,
+  SearchMode,
+  StoreInfo
+} from "./types";
+
+const DEFAULT_BASE = "/api/explorer";
+const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
+const NFT_BASE = "/api/nfts";
+
+/**
+ * Fetch list of available stores.
+ */
+export async function fetchStores(): Promise<StoreInfo[]> {
+  const response = await fetch(`${API_BASE}/stores`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch stores: ${response.status}`);
+  }
+
+  return (await response.json()) as StoreInfo[];
+}
+
+interface PartResponse {
+  part: ExplorerPart;
+  nft?: ExplorerNFT | null;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  };
+}
+
+interface TransactionResponse {
+  transaction: ExplorerTransaction;
+  parts?: ExplorerPart[];
+  nft?: ExplorerNFT | null;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  } | null;
+}
+
+async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const url = `${API_BASE}${path}${query}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    const message = await parseError(response);
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function parseError(response: Response): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === "string") {
+      return data.error;
+    }
+  } catch {
+    // ignore
+  }
+  return `Request failed with status ${response.status}`;
+}
+
+export async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
+  if (!nftId) return null;
+  const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  try {
+    const data = (await response.json()) as ExplorerNFT;
+    return {
+      ...data,
+      partialTransactions: data.partialTransactions ?? [],
+      pagination: data.pagination ?? null
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function requestSafe<T>(path: string, params?: Record<string, string>): Promise<{ success: true; data: T } | { success: false; error: string }> {
+  try {
+    const data = await request<T>(path, params);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Request failed" };
+  }
+}
+
+export async function searchExplorer(
+  mode: SearchMode,
+  query: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
+
+  switch (mode) {
+    case "part": {
+      const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
+      // NFT is now included in the response from the backend
+      return {
+        kind: "part",
+        part: data.part,
+        nft: data.nft ?? null,
+        partialTransactions: data.partialTransactions,
+        pagination: data.pagination ?? {
+          total: data.partialTransactions.length,
+          skip: page * pageSize,
+          limit: pageSize
+        }
+      };
+    }
+    case "transaction": {
+      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
+      const path = isObjectId
+        ? `/transactions/id/${encodeURIComponent(sanitized)}`
+        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
+      const data = await request<TransactionResponse>(path, paginationParams);
+      return {
+        kind: "transaction",
+        transaction: data.transaction,
+        partialTransactions: data.partialTransactions ?? [],
+        pagination: null
+      };
+    }
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`Unsupported search mode: ${exhaustive}`);
+    }
+  }
+}
+
+/**
+ * Unified search that automatically tries part hash, chain hash, or transaction ID.
+ * Tries different endpoints in sequence until one succeeds.
+ */
+export async function unifiedSearch(
+  query: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
+
+  const errors: string[] = [];
+
+  // Detect input characteristics
+  const has0xPrefix = sanitized.toLowerCase().startsWith("0x");
+  const without0x = has0xPrefix ? sanitized.slice(2) : sanitized;
+  const with0x = has0xPrefix ? sanitized : `0x${sanitized}`;
+
+  // Build search candidates - try all variations to maximize chances of finding the result
+  const searchCandidates: Array<{ type: string; path: string; desc: string }> = [];
+  const seenPaths = new Set<string>();
+
+  // Helper to add candidate without duplicates
+  const addCandidate = (type: string, path: string, desc: string) => {
+    if (!seenPaths.has(path)) {
+      seenPaths.add(path);
+      searchCandidates.push({ type, path, desc });
+    }
+  };
+
+  // 1. Try part hash (original input)
+  addCandidate("part-hash", `/parts/${encodeURIComponent(sanitized)}`, "part hash");
+
+  // 2. Chain hash variations - try with and without 0x prefix
+  addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(sanitized)}`, "chain hash (as-is)");
+  
+  if (has0xPrefix) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(without0x)}`, "chain hash (without 0x)");
+  }
+  
+  if (!has0xPrefix && /^[0-9a-fA-F]+$/i.test(sanitized)) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(with0x)}`, "chain hash (with 0x)");
+  }
+
+  // 3. Transaction ID - always try
+  addCandidate("transaction-id", `/transactions/id/${encodeURIComponent(sanitized)}`, "transaction ID");
+
+  // Try all candidates
+  for (const candidate of searchCandidates) {
+    try {
+      if (candidate.type === "part-hash") {
+        const result = await requestSafe<PartResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          return {
+            kind: "part",
+            part: result.data.part,
+            nft: result.data.nft ?? null,
+            partialTransactions: result.data.partialTransactions,
+            pagination: result.data.pagination ?? {
+              total: result.data.partialTransactions.length,
+              skip: page * pageSize,
+              limit: pageSize
+            }
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      } else {
+        // transaction searches
+        const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          // Use NFT metadata from server response, or fetch if not provided
+          let nft = result.data.nft ?? null;
+          if (!nft && result.data.transaction.nftId) {
+            nft = await fetchNftMetadata(result.data.transaction.nftId);
+          }
+
+          return {
+            kind: "transaction",
+            transaction: result.data.transaction,
+            parts: result.data.parts ?? [],
+            nft: nft,
+            partialTransactions: result.data.partialTransactions ?? [],
+            pagination: result.data.pagination ?? null
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      errors.push(`${candidate.desc}: ${errorMsg}`);
+    }
+  }
+
+  // All searches failed - provide detailed error message
+  const triedTypes = [...new Set(searchCandidates.map(c => c.desc))].join(", ");
+  const allErrors = errors.length > 0 ? errors.join("; ") : "No specific errors available";
+  throw new Error(
+    `No results found for "${sanitized}". ` +
+    `Tried searching as: ${triedTypes}. ` +
+    `Errors: ${allErrors}`
+  );
+}
 </file>
 
 </files>
