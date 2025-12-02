@@ -262,9 +262,17 @@ All types use the same verification process and are stored on Arweave.
 
 ## 🚀 Getting Started
 
+**To find the latest transaction:**
+
+1. Navigate to the **"Our Network"** page
+2. Find the store card for the store you're interested in
+3. The **Last Transaction** section shows the most recent transaction ID
+4. Click the copy button (📋) next to the transaction ID to copy it to your clipboard
+5. You can then search for this transaction ID or verify it
+
 **To verify a transaction:**
 
-1. Search for a transaction on this explorer
+1. Search for a transaction on this explorer (or use the latest transaction ID from the store card)
 2. Click the **"Verify"** button
 3. Watch the automatic verification process
 4. Review all verification checks (all should show ✓)

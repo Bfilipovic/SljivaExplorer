@@ -15,6 +15,7 @@
   let stores: StoreWithStatus[] = [];
   let loading = true;
   let error: string | null = null;
+  let copiedTxId: string | null = null;
 
   onMount(async () => {
     await loadStores();
@@ -104,6 +105,19 @@
         return base;
       }
       return baseUrl;
+    }
+  }
+
+  async function copyTransactionId(txId: string) {
+    try {
+      await navigator.clipboard.writeText(txId);
+      copiedTxId = txId;
+      // Reset after 2 seconds
+      setTimeout(() => {
+        copiedTxId = null;
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy transaction ID:", err);
     }
   }
 </script>
@@ -199,7 +213,26 @@
                   </svg>
                   <span class="transaction-label">Last Transaction</span>
                 </div>
-                <div class="transaction-id">{formatAddress(store.lastTransaction._id)}</div>
+                <div class="transaction-id-wrapper">
+                  <div class="transaction-id">{formatAddress(store.lastTransaction._id)}</div>
+                  <button
+                    class="copy-button"
+                    class:copied={copiedTxId === store.lastTransaction._id}
+                    on:click={() => store.lastTransaction && copyTransactionId(store.lastTransaction._id)}
+                    title="Copy transaction ID"
+                  >
+                    {#if copiedTxId === store.lastTransaction._id}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 6L9 17l-5-5"></path>
+                      </svg>
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                    {/if}
+                  </button>
+                </div>
                 <div class="transaction-time">{formatDate(store.lastTransaction.timestamp)}</div>
               </div>
             {:else}
@@ -405,12 +438,52 @@
     flex: 1;
   }
 
+  .transaction-id-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
   .transaction-id {
     font-family: monospace;
     font-size: 0.875rem;
     color: var(--text-primary);
     word-break: break-all;
-    margin-bottom: 0.25rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .copy-button {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+
+  .copy-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  .copy-button.copied {
+    background: #10b981;
+    border-color: #10b981;
+    color: white;
+  }
+
+  .copy-button svg {
+    width: 16px;
+    height: 16px;
   }
 
   .transaction-time {

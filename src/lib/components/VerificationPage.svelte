@@ -181,6 +181,37 @@ Transaction #1  → Previous: null (first transaction)`}</pre>
   </section>
 
   <section>
+    <h3>🚀 Getting Started</h3>
+    
+    <h4>To find the latest transaction:</h4>
+    <ol>
+      <li>Navigate to the <strong>"Our Network"</strong> page</li>
+      <li>Find the store card for the store you're interested in</li>
+      <li>The <strong>Last Transaction</strong> section shows the most recent transaction ID</li>
+      <li>Click the copy button (📋) next to the transaction ID to copy it to your clipboard</li>
+      <li>You can then search for this transaction ID or verify it</li>
+    </ol>
+
+    <h4>To verify a transaction:</h4>
+    <ol>
+      <li>Search for a transaction on this explorer (or use the latest transaction ID from the store card)</li>
+      <li>Click the <strong>"Verify"</strong> button</li>
+      <li>Watch the automatic verification process</li>
+      <li>Review all verification checks (all should show ✓)</li>
+      <li>Click <strong>"Learn More"</strong> to understand the technical details</li>
+    </ol>
+
+    <h4>To view on Arweave:</h4>
+    <ol>
+      <li>Find the transaction's Arweave transaction ID</li>
+      <li>Visit any Arweave explorer (e.g., viewblock.io)</li>
+      <li>Enter the transaction ID</li>
+      <li>View the raw transaction data</li>
+      <li>Verify the hash yourself</li>
+    </ol>
+  </section>
+
+  <section>
     <h3>📚 Additional Resources</h3>
     <ul>
       <li><strong>Hash Verification Documentation</strong>: See <code>backend/docs/HASH_VERIFICATION.md</code></li>
