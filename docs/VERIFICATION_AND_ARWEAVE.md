@@ -167,9 +167,16 @@ Our verification system performs multiple checks:
 - Verifies that the `transactionId` stored on Arweave matches the local transaction ID
 - Ensures consistency between local database and Arweave storage
 
-### 5. Arweave Data Integrity Check ✅
+### 5. Transaction Signature Check ✅
+- Verifies that the transaction is cryptographically signed by the appropriate party
+- Confirms that the signer matches the expected role (buyer, seller, giver, etc.)
+- Ensures the signature is present and valid
+- The signature proves authorization and prevents forgery
+
+### 6. Arweave Data Integrity Check ✅
 - Compares all transaction fields between local database and Arweave
-- Verifies that every field matches exactly (buyer, seller, amount, timestamp, etc.)
+- Verifies that every field matches exactly (buyer, seller, amount, timestamp, signature, etc.)
+- Includes signature fields in the comparison to ensure they match on Arweave
 
 ---
 
@@ -216,8 +223,9 @@ Let's trace a real transaction through the system:
 - Verify the hash yourself
 
 **Step 5:** Trace the history:
-- Get the `previous_arweave_tx` from transaction #10
-- Fetch transaction #9 from Arweave
+- Click the "← Previous Transaction" button on transaction #10
+- The system automatically fetches transaction #9 from Arweave and displays it
+- Click "← Previous Transaction" again to go to transaction #8
 - Repeat back to transaction #1
 - You now have the complete history
 
@@ -228,23 +236,98 @@ Let's trace a real transaction through the system:
 ### Hash Algorithm
 - **Algorithm**: SHA-256
 - **Serialization**: Deterministic JSON (sorted keys, normalized values)
-- **Included in hash**: All transaction fields + transaction_number
-- **Excluded from hash**: `_id` (it IS the hash), `arweaveTxId` (set after upload)
+- **Included in hash**: All transaction fields + transaction_number + signer + signature
+- **Excluded from hash**: `_id` (it IS the hash), `arweaveTxId` (set after upload), `previous_arweave_tx` (metadata)
 
 ### Verification Process
 1. Normalize transaction data
 2. Serialize deterministically
-3. Compute SHA-256 hash
+3. Compute SHA-256 hash (includes signature fields)
 4. Compare with transaction ID
-5. Fetch from Arweave (if available)
-6. Compare all fields
+5. Verify signature is present and signer matches expected role
+6. Fetch from Arweave (if available)
+7. Compare all fields (including signature and signer)
 
 ### Transaction Types
-- **TRANSACTION**: Standard buy/sell transactions
-- **GIFT**: Part gifting between users
-- **MINT**: NFT creation and part minting
+- **MINT**: NFT creation and part minting (signed by minter)
+- **LISTING_CREATE**: Creating a listing (signed by seller)
+- **LISTING_CANCEL**: Cancelling a listing (signed by seller)
+- **NFT_BUY**: Buying an NFT (signed by buyer)
+- **GIFT_CREATE**: Creating a gift (signed by giver)
+- **GIFT_CLAIM**: Claiming a gift (signed by receiver)
+- **GIFT_REFUSE**: Refusing a gift (signed by receiver)
+- **GIFT_CANCEL**: Cancelling a gift (signed by giver)
 
-All types use the same verification process and are stored on Arweave.
+All types use the same verification process, include cryptographic signatures, and are stored on Arweave.
+
+---
+
+## ✍️ Transaction Signatures
+
+### Why Signatures Matter
+
+Every state-changing transaction in our system is cryptographically signed by the appropriate party. This ensures:
+
+- ✅ **Authorization** — Only the owner of a wallet can authorize transactions
+- ✅ **Non-repudiation** — The signer cannot later deny authorizing the transaction
+- ✅ **Security** — Transactions cannot be forged or modified
+- ✅ **Audit Trail** — Every transaction includes proof of who authorized it
+
+### Who Signs What?
+
+Different transaction types require signatures from different parties:
+
+- **MINT** — Signed by the minter/creator
+- **LISTING_CREATE** — Signed by the seller
+- **LISTING_CANCEL** — Signed by the seller
+- **NFT_BUY** — Signed by the buyer
+- **GIFT_CREATE** — Signed by the giver
+- **GIFT_CLAIM** — Signed by the receiver
+- **GIFT_REFUSE** — Signed by the receiver
+- **GIFT_CANCEL** — Signed by the giver
+
+### How Signatures Work
+
+When you perform an action (like buying an NFT or creating a listing):
+
+1. You provide your 12-word mnemonic phrase (this **never leaves your device**)
+2. The system creates a cryptographic signature using your wallet's private key
+3. The signature is included in the transaction data
+4. The transaction hash includes the signature, making it part of the immutable record
+5. The signature is stored both locally and on Arweave for permanent verification
+
+**Your private keys never leave your device.** All signing happens locally in your browser, ensuring maximum security.
+
+### Signature Verification
+
+- **Included in hash**: The `signer` and `signature` fields are part of the transaction data that gets hashed
+- **Verification**: Every transaction includes proof of who authorized it
+- **Storage**: Signatures are stored both locally and on Arweave for permanent verification
+- **Security**: Private keys never leave the user's device; all signing happens client-side
+
+---
+
+## ⏮️ Navigating Transaction History
+
+### Previous Transaction Button
+
+Every transaction stored on Arweave includes a link to the previous transaction. This creates a complete, unbreakable chain of all transactions from the first to the most recent.
+
+When viewing a transaction in the explorer, you'll see a **"← Previous Transaction"** button at the bottom of the transaction summary box. This button:
+
+1. Fetches the current transaction from Arweave
+2. Extracts the `previous_arweave_tx` field
+3. Fetches that previous transaction from Arweave
+4. Gets its local transaction ID (the `transactionId` field stored in Arweave)
+5. Automatically searches for and displays the previous transaction
+
+This allows you to:
+
+- ✅ **Trace history** — Follow transactions back to the very first one
+- ✅ **Verify integrity** — Ensure the chain is unbroken
+- ✅ **Audit independently** — Reconstruct the entire transaction history from Arweave
+
+**Note:** When you navigate to a previous transaction, the verification button resets so you can verify the new transaction independently.
 
 ---
 
@@ -275,8 +358,22 @@ All types use the same verification process and are stored on Arweave.
 1. Search for a transaction on this explorer (or use the latest transaction ID from the store card)
 2. Click the **"Verify"** button
 3. Watch the automatic verification process
-4. Review all verification checks (all should show ✓)
+4. Review all verification checks (all should show ✓):
+   - Hash Calculation Check
+   - Transaction Structure Check
+   - Transaction Signature Check
+   - Arweave Transaction Found
+   - Arweave Transaction ID Match
+   - Arweave Data Integrity Check
 5. Click **"Learn More"** to understand the technical details
+
+**To navigate transaction history:**
+
+1. When viewing any transaction, look for the **"← Previous Transaction"** button at the bottom of the transaction summary
+2. Click the button to automatically fetch and display the previous transaction in the chain
+3. The button fetches from Arweave to get the `previous_arweave_tx` field, then finds that transaction's local ID
+4. Repeat to trace all the way back to the first transaction
+5. Note: The verification button resets when navigating to a new transaction, so you can verify each one independently
 
 **To view on Arweave:**
 

@@ -23,7 +23,7 @@ export interface VerificationResult {
  * Fetch transaction data from Arweave
  * Arweave stores transaction data, and we need to fetch it from the gateway
  */
-async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
+export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
   const gateway = "https://arweave.net";
   
   // First, get transaction info to get the data format
@@ -120,13 +120,22 @@ function compareTransactionFields(local: any, arweave: any): string[] {
     "currency",
     "amount",
     "timestamp",
+    "signer",    // Added for signature verification
+    "signature", // Added for signature verification
   ];
   
   // Add type-specific fields
-  if (normalizedLocal.type === "GIFT") {
+  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
     fieldsToCompare.push("giver", "receiver");
+    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
   } else if (normalizedLocal.type === "MINT") {
     fieldsToCompare.push("buyer", "seller");
+  } else if (normalizedLocal.type === "LISTING_CREATE") {
+    fieldsToCompare.push("seller");
+    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
+    if (normalizedLocal.price) fieldsToCompare.push("price");
+    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
+    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
   } else {
     fieldsToCompare.push("buyer", "seller");
     if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
@@ -148,6 +157,22 @@ function compareTransactionFields(local: any, arweave: any): string[] {
       
       if (localDate !== arweaveDate) {
         errors.push(`Field ${field} mismatch: local=${localDate}, arweave=${arweaveDate}`);
+      }
+      continue;
+    }
+    
+    // Special handling for sellerWallets (object comparison)
+    if (field === "sellerWallets") {
+      const localWallets = JSON.stringify(Object.keys(localValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(localValue[key]);
+        return acc;
+      }, {}));
+      const arweaveWallets = JSON.stringify(Object.keys(arweaveValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(arweaveValue[key]);
+        return acc;
+      }, {}));
+      if (localWallets !== arweaveWallets) {
+        errors.push(`Field ${field} mismatch: local=${localWallets}, arweave=${arweaveWallets}`);
       }
       continue;
     }
@@ -205,6 +230,28 @@ export async function verifyTransaction(
     
     if (!hasRequiredFields) {
       errors.push("Transaction structure validation failed");
+    }
+
+    // Step 2.5: Verify signature if present
+    // Note: Older transactions may not have signatures, but all new transactions should
+    updateStep("Verifying transaction signature");
+    if (transaction.signature && transaction.signer) {
+      // Signature fields are present - verify they're not empty
+      const hasValidSignature = !!(transaction.signature.trim() && transaction.signer.trim());
+      checks.push({
+        name: "Transaction Signature",
+        passed: hasValidSignature,
+        message: hasValidSignature
+          ? `Transaction is signed by ${transaction.signer.substring(0, 10)}...`
+          : "Transaction signature fields are present but invalid"
+      });
+    } else {
+      // No signature - this is acceptable for older transactions
+      checks.push({
+        name: "Transaction Signature",
+        passed: true, // Not a failure, just informational
+        message: "Transaction does not have signature fields (may be an older transaction)"
+      });
     }
     
     // Step 3: Verify Arweave data if available

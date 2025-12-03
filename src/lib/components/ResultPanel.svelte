@@ -6,7 +6,7 @@
   import VerificationModal from "./VerificationModal.svelte";
   import { getPartLink, getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
   import { fetchNftMetadata } from "../api";
-  import { verifyTransaction } from "../utils/verification";
+  import { verifyTransaction, fetchArweaveTransaction } from "../utils/verification";
 
   import { createEventDispatcher } from "svelte";
   
@@ -90,6 +90,55 @@
         passed: false,
         message: error instanceof Error ? error.message : String(error)
       }];
+    }
+  }
+
+  let loadingPrevious = false;
+  let previousError: string | null = null;
+
+  async function handlePreviousTransaction() {
+    if (!result || result.kind !== "transaction" || !result.transaction.arweaveTxId) {
+      return;
+    }
+
+    loadingPrevious = true;
+    previousError = null;
+
+    try {
+      // Step 1: Fetch current transaction from Arweave to get previous_arweave_tx
+      const currentArweaveData = await fetchArweaveTransaction(result.transaction.arweaveTxId);
+      const previousArweaveTxId = currentArweaveData.previous_arweave_tx;
+
+      if (!previousArweaveTxId) {
+        previousError = "This is the first transaction in the chain";
+        loadingPrevious = false;
+        return;
+      }
+
+      // Step 2: Fetch previous transaction from Arweave to get its transactionId
+      const previousArweaveData = await fetchArweaveTransaction(previousArweaveTxId);
+      const previousTransactionId = previousArweaveData.transactionId;
+
+      if (!previousTransactionId) {
+        previousError = "Previous transaction does not have a transactionId";
+        loadingPrevious = false;
+        return;
+      }
+
+      // Step 3: Reset verification state for the new transaction
+      verificationState = "idle";
+      verificationModalOpen = false;
+      verificationStep = "";
+      verificationError = null;
+      verificationChecks = [];
+
+      // Step 4: Dispatch search event with the transactionId
+      dispatch("search", { query: previousTransactionId, storeId: null });
+    } catch (error) {
+      previousError = error instanceof Error ? error.message : "Failed to fetch previous transaction";
+      console.error("Error fetching previous transaction:", error);
+    } finally {
+      loadingPrevious = false;
     }
   }
 </script>
@@ -267,20 +316,43 @@
           </div>
           <div>
             <dt>Buyer</dt>
-            <dd>{formatAddress(result.transaction.buyer)}</dd>
+            <dd>{result.transaction.buyer ? formatAddress(result.transaction.buyer) : "—"}</dd>
           </div>
           <div>
             <dt>Seller</dt>
-            <dd>{formatAddress(result.transaction.seller)}</dd>
+            <dd>{result.transaction.seller ? formatAddress(result.transaction.seller) : "—"}</dd>
           </div>
           <div>
             <dt>Quantity</dt>
             <dd>{result.transaction.quantity}</dd>
           </div>
-          <div>
-            <dt>Amount</dt>
-            <dd>{formatAmount(result.transaction.amount, result.transaction.currency)}</dd>
-          </div>
+          {#if result.transaction.type === "LISTING_CREATE"}
+            <div>
+              <dt>Price</dt>
+              <dd>{result.transaction.price ? formatAmount(result.transaction.price, "YRT") : "—"}</dd>
+            </div>
+            <div>
+              <dt>Accepted Currencies</dt>
+              <dd>
+                {#if result.transaction.sellerWallets && Object.keys(result.transaction.sellerWallets).length > 0}
+                  {Object.keys(result.transaction.sellerWallets).join(", ")}
+                {:else}
+                  —
+                {/if}
+              </dd>
+            </div>
+          {:else}
+            <div>
+              <dt>Amount</dt>
+              <dd>{formatAmount(result.transaction.amount || "", result.transaction.currency || "")}</dd>
+            </div>
+            {#if result.transaction.currency}
+              <div>
+                <dt>Currency</dt>
+                <dd>{result.transaction.currency.toUpperCase()}</dd>
+              </div>
+            {/if}
+          {/if}
           <div>
             <dt>Timestamp</dt>
             <dd>{formatDate(result.transaction.timestamp)}</dd>
@@ -292,6 +364,24 @@
             </div>
           {/if}
         </dl>
+        {#if result.transaction.arweaveTxId}
+          <div class="button-group">
+            <button
+              class="previous-button"
+              disabled={loadingPrevious}
+              on:click={handlePreviousTransaction}
+            >
+              {#if loadingPrevious}
+                Loading...
+              {:else}
+                ← Previous Transaction
+              {/if}
+            </button>
+            {#if previousError}
+              <p class="error-text">{previousError}</p>
+            {/if}
+          </div>
+        {/if}
       </div>
       {#if transactionNft}
         <div class="card media-card">
@@ -459,6 +549,35 @@
   .learn-more-button:hover {
     background: var(--card-border);
     color: var(--text-primary);
+  }
+
+  .previous-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    width: 100%;
+    margin-top: 1rem;
+  }
+
+  .previous-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .previous-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .error-text {
+    color: #ef4444;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
   }
 
   @media (max-width: 640px) {

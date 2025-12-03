@@ -199,7 +199,7 @@
     </div>
 
     {#if result}
-      <ResultPanel {result} on:navigateToVerification={() => {
+      <ResultPanel {result} on:search={handleSearch} on:navigateToVerification={() => {
         setActiveSection('verification');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }} />

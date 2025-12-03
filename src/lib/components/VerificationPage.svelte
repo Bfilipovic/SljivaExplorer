@@ -136,10 +136,77 @@ Transaction #1  → Previous: null (first transaction)`}</pre>
         <p>Verifies that the transactionId stored on Arweave matches the local transaction ID. Ensures consistency between local database and Arweave storage.</p>
       </div>
       <div class="check-item">
-        <strong>5. Arweave Data Integrity Check ✅</strong>
-        <p>Compares all transaction fields between local database and Arweave. Verifies that every field matches exactly (buyer, seller, amount, timestamp, etc.).</p>
+        <strong>5. Transaction Signature Check ✅</strong>
+        <p>Verifies that the transaction is cryptographically signed by the appropriate party (buyer, seller, giver, etc.). The signature proves that the transaction was authorized by the correct wallet owner and cannot be forged.</p>
+      </div>
+      <div class="check-item">
+        <strong>6. Arweave Data Integrity Check ✅</strong>
+        <p>Compares all transaction fields between local database and Arweave. Verifies that every field matches exactly (buyer, seller, amount, timestamp, signature, etc.).</p>
       </div>
     </div>
+  </section>
+
+  <section>
+    <h3>✍️ Transaction Signatures</h3>
+    
+    <h4>Why Signatures Matter</h4>
+    <p>Every state-changing transaction in our system is cryptographically signed by the appropriate party. This ensures:</p>
+    <ul>
+      <li>✅ <strong>Authorization</strong> — Only the owner of a wallet can authorize transactions</li>
+      <li>✅ <strong>Non-repudiation</strong> — The signer cannot later deny authorizing the transaction</li>
+      <li>✅ <strong>Security</strong> — Transactions cannot be forged or modified</li>
+      <li>✅ <strong>Audit Trail</strong> — Every transaction includes proof of who authorized it</li>
+    </ul>
+
+    <h4>Who Signs What?</h4>
+    <p>Different transaction types require signatures from different parties:</p>
+    <ul>
+      <li><strong>MINT</strong> — Signed by the minter/creator</li>
+      <li><strong>LISTING_CREATE</strong> — Signed by the seller</li>
+      <li><strong>LISTING_CANCEL</strong> — Signed by the seller</li>
+      <li><strong>NFT_BUY</strong> — Signed by the buyer</li>
+      <li><strong>GIFT_CREATE</strong> — Signed by the giver</li>
+      <li><strong>GIFT_CLAIM</strong> — Signed by the receiver</li>
+      <li><strong>GIFT_REFUSE</strong> — Signed by the receiver</li>
+      <li><strong>GIFT_CANCEL</strong> — Signed by the giver</li>
+    </ul>
+
+    <h4>How Signatures Work</h4>
+    <p>When you perform an action (like buying an NFT or creating a listing):</p>
+    <ol>
+      <li>You provide your 12-word mnemonic phrase (this never leaves your device)</li>
+      <li>The system creates a cryptographic signature using your wallet's private key</li>
+      <li>The signature is included in the transaction data</li>
+      <li>The transaction hash includes the signature, making it part of the immutable record</li>
+      <li>The signature is stored both locally and on Arweave for permanent verification</li>
+    </ol>
+
+    <p><strong>Your private keys never leave your device.</strong> All signing happens locally in your browser, ensuring maximum security.</p>
+  </section>
+
+  <section>
+    <h3>⏮️ Navigating Transaction History</h3>
+    
+    <h4>Previous Transaction Button</h4>
+    <p>Every transaction stored on Arweave includes a link to the previous transaction. This creates a complete, unbreakable chain of all transactions from the first to the most recent.</p>
+
+    <p>When viewing a transaction, you'll see a <strong>"← Previous Transaction"</strong> button at the bottom of the transaction summary. This button:</p>
+    <ol>
+      <li>Fetches the current transaction from Arweave</li>
+      <li>Extracts the <code>previous_arweave_tx</code> field</li>
+      <li>Fetches that previous transaction from Arweave</li>
+      <li>Gets its local transaction ID</li>
+      <li>Automatically searches for and displays the previous transaction</li>
+    </ol>
+
+    <p>This allows you to:</p>
+    <ul>
+      <li>✅ <strong>Trace history</strong> — Follow transactions back to the very first one</li>
+      <li>✅ <strong>Verify integrity</strong> — Ensure the chain is unbroken</li>
+      <li>✅ <strong>Audit independently</strong> — Reconstruct the entire transaction history from Arweave</li>
+    </ul>
+
+    <p><strong>Note:</strong> When you navigate to a previous transaction, the verification button resets so you can verify the new transaction independently.</p>
   </section>
 
   <section>

@@ -49,21 +49,32 @@ export interface PartialTransaction {
 
 export interface ExplorerTransaction {
   _id: string;
-  type: "TRANSACTION" | "GIFT" | "MINT";
+  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
   transaction_number?: number;
-  listingId: string;
-  reservationId: string;
-  buyer: string;
-  seller: string;
-  nftId: string;
-  quantity: number;
-  chainTx: string;
-  currency: string;
-  amount: string;
+  listingId?: string;
+  reservationId?: string;
+  buyer?: string;
+  seller?: string;
+  nftId?: string;
+  quantity?: number;
+  chainTx?: string;
+  currency?: string;
+  amount?: string;
   arweaveTxId?: string;
   timestamp: string;
   storeId?: string;
   storeName?: string;
+  // Signature fields (for verification)
+  signer?: string;
+  signature?: string;
+  // Gift-specific fields
+  giver?: string;
+  receiver?: string;
+  giftId?: string;
+  // Listing-specific fields
+  price?: string;
+  sellerWallets?: Record<string, string>;
+  bundleSale?: boolean;
 }
 
 export type ExplorerResult =
