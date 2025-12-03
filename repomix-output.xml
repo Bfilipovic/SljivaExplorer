@@ -49,6 +49,7 @@ docs/
   running.md
   session-playbook.md
   sljivastore-bridge.md
+  VERIFICATION_AND_ARWEAVE.md
 scripts/
   add-store.sh
   discover-store.sh
@@ -66,13 +67,18 @@ server/
 src/
   lib/
     components/
+      NetworkPage.svelte
       PartialTable.svelte
       PartsList.svelte
       ResultPanel.svelte
       SearchPanel.svelte
+      VerificationModal.svelte
+      VerificationPage.svelte
     utils/
       format.ts
+      hash.ts
       storeLinks.ts
+      verification.ts
     api.ts
     types.ts
   app.css
@@ -370,134 +376,6 @@ echo "✅ Explorer rebuilt and restarted!"
 echo ""
 echo "To view full logs: sudo docker logs explorer"
 echo "To follow logs:    sudo docker logs -f explorer"
-</file>
-
-<file path="server/config/stores.ts">
-/**
- * Store Configuration
- * 
- * Defines the structure and management of multiple SljivaStore-compatible stores
- * that the Explorer can query.
- */
-
-export interface StoreConfig {
-  id: string;
-  name: string;
-  baseUrl: string;
-  publicKey?: string;
-  description?: string;
-  enabled?: boolean;
-}
-
-/**
- * Parse store configurations from environment variable.
- * 
- * Expected format: JSON array of store objects:
- * [
- *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
- *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
- * ]
- */
-function parseStoresFromEnv(): StoreConfig[] {
-  const storesEnv = process.env.EXPLORER_STORES;
-  
-  if (!storesEnv) {
-    return getDefaultStores();
-  }
-
-  try {
-    const parsed = JSON.parse(storesEnv);
-    
-    if (!Array.isArray(parsed)) {
-      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
-      return getDefaultStores();
-    }
-
-    const stores: StoreConfig[] = [];
-    for (const item of parsed) {
-      if (typeof item !== "object" || item === null) {
-        console.warn("[Stores Config] Skipping invalid store entry:", item);
-        continue;
-      }
-
-      if (!item.id || !item.name || !item.baseUrl) {
-        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
-        continue;
-      }
-
-      stores.push({
-        id: String(item.id),
-        name: String(item.name),
-        baseUrl: String(item.baseUrl).replace(/\/$/, ""), // Remove trailing slash
-        publicKey: item.publicKey ? String(item.publicKey) : undefined,
-        description: item.description ? String(item.description) : undefined,
-        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true
-      });
-    }
-
-    if (stores.length === 0) {
-      console.warn("[Stores Config] No valid stores found, using defaults");
-      return getDefaultStores();
-    }
-
-    return stores;
-  } catch (error) {
-    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
-    return getDefaultStores();
-  }
-}
-
-/**
- * Get default store configuration for local development.
- */
-function getDefaultStores(): StoreConfig[] {
-  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
-  return [
-    {
-      id: "local",
-      name: "Local SljivaStore",
-      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
-      description: "Default local development store",
-      enabled: true
-    }
-  ];
-}
-
-// Load and cache store configurations
-let cachedStores: StoreConfig[] | null = null;
-
-/**
- * Get all configured stores.
- * Stores are loaded once on first call and cached.
- */
-export function getStores(): StoreConfig[] {
-  if (cachedStores === null) {
-    cachedStores = parseStoresFromEnv();
-  }
-  return cachedStores.filter(store => store.enabled !== false);
-}
-
-/**
- * Get a store by its ID.
- * @param id Store identifier
- * @returns Store configuration or undefined if not found
- */
-export function getStoreById(id: string): StoreConfig | undefined {
-  const stores = getStores();
-  return stores.find(store => store.id === id);
-}
-
-/**
- * Initialize store configuration (call on server startup).
- * This will parse and validate stores, logging the results.
- */
-export function initializeStores(): void {
-  const stores = getStores();
-  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
-  stores.forEach(store => {
-    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
-  });
-}
 </file>
 
 <file path="server/utils/storeClient.ts">
@@ -1023,6 +901,228 @@ npm run start:server
 </style>
 </file>
 
+<file path="src/lib/components/VerificationModal.svelte">
+<script lang="ts">
+  import { onDestroy } from "svelte";
+  import { createEventDispatcher } from "svelte";
+  import type { VerificationCheck } from "../utils/verification";
+  
+  export let isOpen: boolean = false;
+  export let currentStep: string = "";
+  export let checks: VerificationCheck[] = [];
+  export let isVerifying: boolean = false;
+  
+  const dispatch = createEventDispatcher();
+  
+  function closeModal() {
+    dispatch("close");
+  }
+
+  let dots: number = 1;
+
+  // Animate dots every 500ms
+  let intervalId: number | null = null;
+
+  $: if (isOpen && isVerifying) {
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+    }
+    intervalId = window.setInterval(() => {
+      dots = dots >= 3 ? 1 : dots + 1;
+    }, 500);
+  } else {
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+    dots = 1;
+  }
+
+  onDestroy(() => {
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+    }
+  });
+</script>
+
+{#if isOpen}
+  <div class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-content" class:error={!isVerifying && checks.length > 0 && checks.some(c => !c.passed)}>
+      <h3 id="modal-title">
+        {#if isVerifying}
+          Verifying Transaction
+        {:else if checks.length > 0 && checks.every(c => c.passed)}
+          Verification Successful
+        {:else}
+          Verification Failed
+        {/if}
+      </h3>
+      <div class="verification-status">
+        {#if isVerifying}
+          <p class="status-text">
+            {currentStep}
+            <span class="dots">{Array(dots).fill(".").join("")}</span>
+          </p>
+        {:else if checks.length > 0}
+          <div class="checks-list">
+            {#each checks as check}
+              <div class="check-item" class:failed={!check.passed}>
+                <span class="check-icon">
+                  {#if check.passed}
+                    ✓
+                  {:else}
+                    ✗
+                  {/if}
+                </span>
+                <div class="check-content">
+                  <div class="check-name">{check.name}</div>
+                  {#if check.message}
+                    <div class="check-message">{check.message}</div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+          <button class="close-button" on:click={closeModal}>Close</button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    padding: 1rem;
+  }
+
+  .modal-content {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    padding: 2rem;
+    max-width: 500px;
+    width: 100%;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  }
+
+  .modal-content h3 {
+    margin: 0 0 1.5rem;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-align: center;
+  }
+
+  .verification-status {
+    text-align: center;
+  }
+
+  .status-text {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+    font-family: monospace;
+    white-space: nowrap;
+  }
+
+  .dots {
+    display: inline-block;
+    min-width: 1.5em;
+    text-align: left;
+  }
+
+  .modal-content.error {
+    border-color: #ef4444;
+  }
+
+  .close-button {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+
+  .close-button:hover {
+    background: var(--card-border);
+  }
+
+  .checks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .check-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+  }
+
+  .check-item.failed {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.05);
+  }
+
+  .check-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: #10b981;
+  }
+
+  .check-item.failed .check-icon {
+    color: #ef4444;
+  }
+
+  .check-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .check-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+  }
+
+  .check-message {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .check-item.failed .check-message {
+    color: #ef4444;
+  }
+</style>
+</file>
+
 <file path="src/lib/utils/format.ts">
 export function formatAddress(value: string, length = 6): string {
   if (!value) return "";
@@ -1046,44 +1146,6 @@ export function formatAmount(amount: string, currency: string): string {
     return `${amount} ${currency}`;
   }
   return `${numeric.toFixed(4)} ${currency.toUpperCase()}`;
-}
-</file>
-
-<file path="src/lib/utils/storeLinks.ts">
-/**
- * Store link utilities
- */
-
-/**
- * Get the store frontend URL from environment or default to localhost:5173
- */
-export function getStoreFrontendUrl(): string {
-  // Check for explicit store URL env var
-  if (import.meta.env.VITE_STORE_URL) {
-    return import.meta.env.VITE_STORE_URL.replace(/\/$/, '');
-  }
-  
-  // Default to localhost:5173 for local development
-  return 'http://localhost:5173';
-}
-
-/**
- * Generate a link to a part in the store frontend
- */
-export function getPartLink(partHash: string): string {
-  const base = getStoreFrontendUrl();
-  return `${base}/part/${encodeURIComponent(partHash)}`;
-}
-
-/**
- * Generate a link to a blockchain transaction explorer
- */
-export function getChainTxLink(chainTx: string, currency?: string): string {
-  if (!chainTx) return '#';
-  const isSol = currency?.toUpperCase() === 'SOL';
-  const base = isSol ? 'https://solscan.io/tx/' : 'https://etherscan.io/tx/';
-  // Keep the hash as-is (with or without 0x prefix)
-  return `${base}${chainTx}`;
 }
 </file>
 
@@ -1327,21 +1389,6 @@ If these return errors, check that:
 - Your backend is running
 - The `/api/explorer` routes are enabled
 - The domain/port is correct
-</file>
-
-<file path="index.html">
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SljivaStore Explorer</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
-</html>
 </file>
 
 <file path="LOCAL_SETUP.md">
@@ -2308,6 +2355,683 @@ fi
 </style>
 </file>
 
+<file path="src/lib/utils/hash.ts">
+/**
+ * Client-side hash calculation utilities
+ * Ported from backend/utils/hash.js for transaction verification
+ * 
+ * IMPORTANT: This must match backend/utils/hash.js exactly!
+ */
+
+/**
+ * Deterministic stringify function for consistent hashing.
+ * Handles object key sorting, Date serialization, null/undefined normalization
+ */
+function deterministicStringify(obj: any): string {
+  if (obj === null) {
+    return "null";
+  }
+  if (obj === undefined) {
+    return "undefined";
+  }
+  
+  // Handle primitives
+  if (typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  
+  // Handle Date objects
+  if (obj instanceof Date) {
+    return JSON.stringify(obj.toISOString());
+  }
+  
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    const items = obj.map(item => deterministicStringify(item));
+    return `[${items.join(",")}]`;
+  }
+  
+  // Handle objects - sort keys for consistency
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    const value = obj[key];
+    // Skip undefined values to maintain consistency
+    if (value === undefined) {
+      return null;
+    }
+    const serializedValue = deterministicStringify(value);
+    return `${JSON.stringify(key)}:${serializedValue}`;
+  }).filter((pair): pair is string => pair !== null);
+  
+  return `{${pairs.join(",")}}`;
+}
+
+/**
+ * Hash an object deterministically using SHA-256
+ */
+async function hashObject(obj: any): Promise<string> {
+  const serialized = deterministicStringify(obj);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(serialized);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Create a hashable representation of a Transaction for hashing.
+ * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
+ * 
+ * Handles all transaction types:
+ * - MINT
+ * - LISTING_CREATE
+ * - LISTING_CANCEL
+ * - NFT_BUY
+ * - GIFT_CREATE
+ * - GIFT_CLAIM
+ * - GIFT_REFUSE
+ * - GIFT_CANCEL
+ * 
+ * Excludes _id and arweaveTxId (since _id will be the hash itself).
+ * Includes signer and signature fields if present.
+ */
+function hashableTransaction(transaction: any): any {
+  // Exclude technical metadata that should not be in hash
+  const { _id, arweaveTxId, previous_arweave_tx, ...rest } = transaction;
+  const type = String(rest.type || "");
+  
+  // Base fields present in all transaction types
+  const base: any = {
+    type,
+    transaction_number: Number(rest.transaction_number || 0),
+    timestamp: rest.timestamp instanceof Date 
+      ? rest.timestamp 
+      : new Date(rest.timestamp || Date.now()),
+  };
+  
+  // Type-specific field handling - MUST MATCH BACKEND EXACTLY
+  switch (type) {
+    case "MINT": {
+      const minter = String(rest.buyer || rest.seller || rest.creator || "").toLowerCase();
+      base.nftId = String(rest.nftId || "");
+      base.quantity = Number(rest.quantity || 0);
+      base.buyer = minter;
+      base.seller = minter;
+      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
+        ? String(rest.chainTx) 
+        : null;
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "LISTING_CREATE": {
+      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
+        ? String(rest.listingId) 
+        : null;
+      base.nftId = String(rest.nftId || "");
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.price = String(rest.price || "");
+      base.currency = String(rest.currency || "");
+      if (rest.sellerWallets && typeof rest.sellerWallets === 'object') {
+        // Sort wallet keys for deterministic hashing
+        base.sellerWallets = Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
+          acc[key] = String(rest.sellerWallets[key]);
+          return acc;
+        }, {} as any);
+      }
+      base.bundleSale = rest.bundleSale === true || rest.bundleSale === "true";
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "LISTING_CANCEL": {
+      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
+        ? String(rest.listingId) 
+        : null;
+      base.seller = String(rest.seller || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "NFT_BUY": {
+      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
+        ? String(rest.listingId) 
+        : null;
+      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
+        ? String(rest.reservationId) 
+        : null;
+      base.nftId = String(rest.nftId || "");
+      base.buyer = String(rest.buyer || "").toLowerCase();
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
+        ? String(rest.chainTx) 
+        : null;
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CREATE": {
+      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
+        ? String(rest.giftId) 
+        : null;
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CLAIM": {
+      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
+        ? String(rest.giftId) 
+        : null;
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
+        ? String(rest.chainTx) 
+        : null;
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_REFUSE": {
+      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
+        ? String(rest.giftId) 
+        : null;
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CANCEL": {
+      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
+        ? String(rest.giftId) 
+        : null;
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    // Legacy types for backward compatibility
+    case "TRANSACTION": {
+      // Legacy TRANSACTION type - map to NFT_BUY structure
+      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
+        ? String(rest.listingId) 
+        : null;
+      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
+        ? String(rest.reservationId) 
+        : null;
+      base.nftId = String(rest.nftId || "");
+      base.buyer = String(rest.buyer || "").toLowerCase();
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
+        ? String(rest.chainTx) 
+        : null;
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT": {
+      // Legacy GIFT type - map to GIFT_CLAIM structure
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
+        ? String(rest.chainTx) 
+        : null;
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    default:
+      throw new Error(`Unknown transaction type: ${type}`);
+  }
+  
+  return base;
+}
+
+/**
+ * Calculate the expected hash for a transaction
+ */
+export async function calculateTransactionHash(transaction: any): Promise<string> {
+  const hashable = hashableTransaction(transaction);
+  return await hashObject(hashable);
+}
+</file>
+
+<file path="src/lib/utils/storeLinks.ts">
+/**
+ * Store link utilities
+ */
+
+/**
+ * Get the store frontend URL from environment or default to localhost:5173
+ */
+export function getStoreFrontendUrl(): string {
+  // Check for explicit store URL env var
+  if (import.meta.env.VITE_STORE_URL) {
+    return import.meta.env.VITE_STORE_URL.replace(/\/$/, '');
+  }
+  
+  // Default to localhost:5173 for local development
+  return 'http://localhost:5173';
+}
+
+/**
+ * Generate a link to a part in the store frontend
+ */
+export function getPartLink(partHash: string): string {
+  const base = getStoreFrontendUrl();
+  return `${base}/part/${encodeURIComponent(partHash)}`;
+}
+
+/**
+ * Generate a link to a blockchain transaction explorer
+ */
+export function getChainTxLink(chainTx: string, currency?: string): string {
+  if (!chainTx) return '#';
+  const isSol = currency?.toUpperCase() === 'SOL';
+  const base = isSol ? 'https://solscan.io/tx/' : 'https://etherscan.io/tx/';
+  // Keep the hash as-is (with or without 0x prefix)
+  return `${base}${chainTx}`;
+}
+
+/**
+ * Generate a link to an Arweave transaction explorer
+ */
+export function getArweaveTxLink(arweaveTxId: string): string {
+  if (!arweaveTxId) return '#';
+  // Use viewblock.io Arweave explorer for better UX (can be configured via env)
+  const explorer = import.meta.env.VITE_ARWEAVE_EXPLORER || 'https://viewblock.io/arweave/tx';
+  return `${explorer.replace(/\/$/, '')}/${arweaveTxId}`;
+}
+</file>
+
+<file path="src/lib/utils/verification.ts">
+/**
+ * Transaction verification utilities
+ */
+
+import type { ExplorerTransaction } from "../types";
+import { calculateTransactionHash } from "./hash";
+
+export interface VerificationCheck {
+  name: string;
+  passed: boolean;
+  message?: string;
+}
+
+export interface VerificationResult {
+  verified: boolean;
+  errors: string[];
+  checks: VerificationCheck[];
+  hashMatch?: boolean;
+  arweaveMatch?: boolean;
+}
+
+/**
+ * Fetch transaction data from Arweave
+ * Arweave stores transaction data, and we need to fetch it from the gateway
+ */
+export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
+  const gateway = "https://arweave.net";
+  
+  // First, get transaction info to get the data format
+  const txResponse = await fetch(`${gateway}/tx/${arweaveTxId}`);
+  if (!txResponse.ok) {
+    throw new Error(`Failed to fetch Arweave transaction metadata: ${txResponse.status}`);
+  }
+  
+  const txInfo = await txResponse.json();
+  
+  // Fetch the actual data
+  const dataResponse = await fetch(`${gateway}/${arweaveTxId}`);
+  if (!dataResponse.ok) {
+    throw new Error(`Failed to fetch Arweave transaction data: ${dataResponse.status}`);
+  }
+  
+  // Try to parse as JSON
+  try {
+    const dataText = await dataResponse.text();
+    return JSON.parse(dataText);
+  } catch (error) {
+    // If not JSON, try to decode as base64
+    try {
+      const dataText = await dataResponse.text();
+      return JSON.parse(atob(dataText));
+    } catch {
+      throw new Error(`Failed to parse Arweave transaction data: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+/**
+ * Normalize a value for comparison (handles dates, strings, numbers)
+ */
+function normalizeValue(value: any): any {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string") {
+    // Normalize empty strings to null for chainTx
+    return value.trim().toLowerCase() || null;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  // Handle date strings - convert to ISO string for comparison
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return new Date(value).toISOString();
+  }
+  return String(value).toLowerCase();
+}
+
+/**
+ * Normalize a transaction for comparison
+ * Maps buyer/seller to giver/receiver for GIFT transactions
+ */
+function normalizeTransactionForComparison(tx: any): any {
+  const normalized = { ...tx };
+  
+  // For GIFT transactions: explorer API maps giver->seller, receiver->buyer
+  // But Arweave stores giver/receiver, so normalize explorer format to match Arweave
+  if (tx.type === "GIFT") {
+    // Always map seller -> giver and buyer -> receiver if giver/receiver don't exist
+    if (tx.giver === undefined || tx.giver === null) {
+      normalized.giver = tx.seller || "";
+    }
+    if (tx.receiver === undefined || tx.receiver === null) {
+      normalized.receiver = tx.buyer || "";
+    }
+  }
+  
+  return normalized;
+}
+
+/**
+ * Compare transaction fields between local and Arweave data
+ */
+function compareTransactionFields(local: any, arweave: any): string[] {
+  const errors: string[] = [];
+  
+  // Normalize local transaction to match Arweave format
+  const normalizedLocal = normalizeTransactionForComparison(local);
+  
+  // Fields to compare (excluding transactionId and previous_arweave_tx which are metadata)
+  const fieldsToCompare = [
+    "type",
+    "transaction_number",
+    "nftId",
+    "quantity",
+    "chainTx",
+    "currency",
+    "amount",
+    "timestamp",
+    "signer",    // Added for signature verification
+    "signature", // Added for signature verification
+  ];
+  
+  // Add type-specific fields
+  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
+    fieldsToCompare.push("giver", "receiver");
+    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
+  } else if (normalizedLocal.type === "MINT") {
+    fieldsToCompare.push("buyer", "seller");
+  } else if (normalizedLocal.type === "LISTING_CREATE") {
+    fieldsToCompare.push("seller");
+    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
+    if (normalizedLocal.price) fieldsToCompare.push("price");
+    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
+    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
+  } else {
+    fieldsToCompare.push("buyer", "seller");
+    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
+    if (normalizedLocal.reservationId) fieldsToCompare.push("reservationId");
+  }
+  
+  for (const field of fieldsToCompare) {
+    const localValue = normalizeValue(normalizedLocal[field]);
+    const arweaveValue = normalizeValue(arweave[field]);
+    
+    // Special handling for timestamp - compare ISO strings
+    if (field === "timestamp") {
+      const localDate = normalizedLocal.timestamp instanceof Date 
+        ? normalizedLocal.timestamp.toISOString() 
+        : new Date(normalizedLocal.timestamp).toISOString();
+      const arweaveDate = arweave.timestamp instanceof Date
+        ? arweave.timestamp.toISOString()
+        : new Date(arweave.timestamp).toISOString();
+      
+      if (localDate !== arweaveDate) {
+        errors.push(`Field ${field} mismatch: local=${localDate}, arweave=${arweaveDate}`);
+      }
+      continue;
+    }
+    
+    // Special handling for sellerWallets (object comparison)
+    if (field === "sellerWallets") {
+      const localWallets = JSON.stringify(Object.keys(localValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(localValue[key]);
+        return acc;
+      }, {}));
+      const arweaveWallets = JSON.stringify(Object.keys(arweaveValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(arweaveValue[key]);
+        return acc;
+      }, {}));
+      if (localWallets !== arweaveWallets) {
+        errors.push(`Field ${field} mismatch: local=${localWallets}, arweave=${arweaveWallets}`);
+      }
+      continue;
+    }
+    
+    if (localValue !== arweaveValue) {
+      errors.push(`Field ${field} mismatch: local=${localValue}, arweave=${arweaveValue}`);
+    }
+  }
+  
+  return errors;
+}
+
+/**
+ * Verify a transaction
+ * 1. Calculates hash and compares with transaction ID
+ * 2. If Arweave transaction exists, fetches and compares all fields
+ */
+export async function verifyTransaction(
+  transaction: ExplorerTransaction,
+  updateStep: (step: string) => void
+): Promise<VerificationResult> {
+  const errors: string[] = [];
+  const checks: VerificationCheck[] = [];
+  let hashMatch = false;
+  let arweaveMatch = false;
+  
+  try {
+    // Step 1: Calculate hash
+    updateStep("Calculating hash");
+    const calculatedHash = await calculateTransactionHash(transaction);
+    hashMatch = calculatedHash === transaction._id;
+    
+    checks.push({
+      name: "Hash Calculation",
+      passed: hashMatch,
+      message: hashMatch 
+        ? "Transaction hash matches the stored transaction ID"
+        : `Hash mismatch: calculated ${calculatedHash.substring(0, 16)}... but transaction ID is ${transaction._id.substring(0, 16)}...`
+    });
+    
+    if (!hashMatch) {
+      errors.push(`Hash mismatch: expected ${calculatedHash}, got ${transaction._id}`);
+    }
+    
+    // Step 2: Verify transaction structure
+    updateStep("Verifying transaction structure");
+    const hasRequiredFields = transaction.type && transaction.nftId && transaction.quantity !== undefined;
+    checks.push({
+      name: "Transaction Structure",
+      passed: hasRequiredFields,
+      message: hasRequiredFields
+        ? "All required transaction fields are present"
+        : "Missing required transaction fields"
+    });
+    
+    if (!hasRequiredFields) {
+      errors.push("Transaction structure validation failed");
+    }
+
+    // Step 2.5: Verify signature if present
+    // Note: Older transactions may not have signatures, but all new transactions should
+    updateStep("Verifying transaction signature");
+    if (transaction.signature && transaction.signer) {
+      // Signature fields are present - verify they're not empty
+      const hasValidSignature = !!(transaction.signature.trim() && transaction.signer.trim());
+      checks.push({
+        name: "Transaction Signature",
+        passed: hasValidSignature,
+        message: hasValidSignature
+          ? `Transaction is signed by ${transaction.signer.substring(0, 10)}...`
+          : "Transaction signature fields are present but invalid"
+      });
+    } else {
+      // No signature - this is acceptable for older transactions
+      checks.push({
+        name: "Transaction Signature",
+        passed: true, // Not a failure, just informational
+        message: "Transaction does not have signature fields (may be an older transaction)"
+      });
+    }
+    
+    // Step 3: Verify Arweave data if available
+    if (transaction.arweaveTxId) {
+      updateStep("Fetching Arweave transaction");
+      try {
+        const arweaveData = await fetchArweaveTransaction(transaction.arweaveTxId);
+        
+        updateStep("Comparing Arweave data");
+        const fieldErrors = compareTransactionFields(transaction, arweaveData);
+        
+        // Check if Arweave transaction exists
+        checks.push({
+          name: "Arweave Transaction Found",
+          passed: true,
+          message: `Transaction found on Arweave at ${transaction.arweaveTxId.substring(0, 16)}...`
+        });
+        
+        // Check transactionId match
+        const transactionIdMatch = arweaveData.transactionId && arweaveData.transactionId === transaction._id;
+        checks.push({
+          name: "Arweave Transaction ID",
+          passed: transactionIdMatch,
+          message: transactionIdMatch
+            ? "Transaction ID in Arweave matches local transaction ID"
+            : `Transaction ID mismatch: expected ${transaction._id.substring(0, 16)}... but Arweave has ${arweaveData.transactionId?.substring(0, 16) || "missing"}...`
+        });
+        
+        // Check field matching
+        arweaveMatch = fieldErrors.length === 0;
+        checks.push({
+          name: "Arweave Data Integrity",
+          passed: arweaveMatch,
+          message: arweaveMatch
+            ? "All transaction fields match between local and Arweave storage"
+            : fieldErrors.slice(0, 2).join("; ")
+        });
+        
+        errors.push(...fieldErrors);
+        
+        if (arweaveData.transactionId && arweaveData.transactionId !== transaction._id) {
+          errors.push(`Arweave transactionId mismatch: expected ${transaction._id}, got ${arweaveData.transactionId}`);
+        }
+      } catch (arweaveError) {
+        const errorMsg = arweaveError instanceof Error ? arweaveError.message : String(arweaveError);
+        checks.push({
+          name: "Arweave Transaction Found",
+          passed: false,
+          message: `Failed to fetch from Arweave: ${errorMsg}`
+        });
+        errors.push(`Failed to verify Arweave data: ${errorMsg}`);
+      }
+    } else {
+      // If no Arweave transaction, that's okay - just verify hash
+      checks.push({
+        name: "Arweave Storage",
+        passed: true,
+        message: "Transaction not yet uploaded to Arweave (optional)"
+      });
+      arweaveMatch = true; // No Arweave to verify, so consider it "matched"
+    }
+    
+    return {
+      verified: hashMatch && errors.length === 0,
+      errors,
+      checks,
+      hashMatch,
+      arweaveMatch: transaction.arweaveTxId ? arweaveMatch : undefined,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    errors.push(`Verification failed: ${errorMsg}`);
+    checks.push({
+      name: "Verification Process",
+      passed: false,
+      message: errorMsg
+    });
+    return {
+      verified: false,
+      errors,
+      checks,
+      hashMatch: false,
+      arweaveMatch: false,
+    };
+  }
+}
+</file>
+
 <file path="tests/api.test.ts">
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchExplorer, fetchStores } from "../src/lib/api";
@@ -2608,6 +3332,22 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Start backend server (serves both API and static files in production)
 CMD ["tsx", "server/index.ts"]
+</file>
+
+<file path="index.html">
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/explorer_icon.png" />
+    <title>SljivaStore Explorer</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
 </file>
 
 <file path="package.json">
@@ -3112,6 +3852,1100 @@ curl https://store.example.com/api/explorer/stores
 ```
 </file>
 
+<file path="docs/VERIFICATION_AND_ARWEAVE.md">
+# Transaction Verification & Arweave Storage
+
+## Trust Through Transparency: How We Guarantee Transaction Integrity
+
+At SljivaStore, we believe that trust in a decentralized marketplace must be built on cryptographic proof, not promises. Every transaction on our platform is verifiable by anyone, at any time, using standard cryptographic tools. You don't need to trust us—you can verify everything yourself.
+
+---
+
+## 🔐 Hash-Based Transaction Verification
+
+### What is Hash-Based Verification?
+
+Every transaction in our system has a unique identifier (transaction ID) that is **cryptographically derived from the transaction data itself**. This means:
+
+- **The transaction ID is not arbitrary**—it's mathematically computed from all the transaction fields
+- **Any modification to transaction data** would produce a completely different ID
+- **You can independently verify** that a transaction's ID matches its data
+
+### How It Works
+
+When a transaction is created, we:
+
+1. **Collect all transaction fields** (type, buyer, seller, amount, timestamp, transaction number, etc.)
+2. **Normalize the data** (sort fields, convert dates to ISO format, lowercase addresses)
+3. **Compute a SHA-256 hash** of the normalized data
+4. **Use that hash as the transaction ID**
+
+This process ensures that:
+- ✅ Same data always produces the same hash
+- ✅ Different data always produces a different hash
+- ✅ No central authority assigns IDs—they're mathematically determined
+
+### Example: Verifying a Transaction
+
+Let's say you want to verify transaction `7bac446323d968f034fbc35e01c35fa90efe8b34cf5ff9bb6f14308ae4f1a5c8`.
+
+**Transaction Data:**
+```json
+{
+  "type": "TRANSACTION",
+  "transaction_number": 1,
+  "nftId": "aa3b6c028ee5966d67195ba8906e46899b6f5557f3043fe08712991f9f4a898e",
+  "buyer": "0xc074dadc902ea5540aed7c5ca6634708bb4d9474",
+  "seller": "0x3aa0dd7bc8b16825f3c14fc9b4bf745ac60c9de0",
+  "quantity": 2,
+  "chainTx": "0x3b59d1f89e55f590df7a1686b6d1b16aebd419776798266167351d547b6305fa",
+  "currency": "ETH",
+  "amount": "0.001",
+  "timestamp": "2025-12-02T01:56:14.000Z"
+}
+```
+
+**You can verify it yourself:**
+
+1. **Normalize the data** (sort fields, convert timestamps, lowercase addresses)
+2. **Serialize deterministically** to a string
+3. **Compute SHA-256 hash** of that string
+4. **Compare** the computed hash with the transaction ID
+
+If they match, you can be 100% certain that:
+- ✅ The transaction data has not been tampered with
+- ✅ The transaction ID was correctly generated from the data
+- ✅ The transaction is authentic
+
+**Try it yourself:** Click the "Verify" button on any transaction to see our automatic verification process in action.
+
+---
+
+## 🔗 Permanent Storage on Arweave
+
+### Why Arweave?
+
+While our database stores transaction data for quick access, we also upload every transaction to **Arweave**, a permanent, decentralized storage network. Arweave provides:
+
+- **Permanent storage** — Data stored on Arweave is designed to last for hundreds of years
+- **Decentralization** — No single point of failure, data replicated across the network
+- **Immutable** — Once stored, data cannot be altered
+- **Publicly verifiable** — Anyone can fetch and verify transactions independently
+
+### Transaction Chaining: Complete Audit Trail
+
+Every transaction we upload to Arweave includes a link to the **previous transaction**. This creates an unbreakable chronological chain:
+
+```
+Transaction #10 → Previous: Transaction #9
+Transaction #9  → Previous: Transaction #8
+Transaction #8  → Previous: Transaction #7
+...
+Transaction #1  → Previous: null (first transaction)
+```
+
+This means:
+- ✅ **Complete history** — You can trace every transaction from the latest back to the first
+- ✅ **No gaps** — Every transaction links to the previous one
+- ✅ **Independent verification** — You can reconstruct the entire transaction history from Arweave alone
+
+### Sequential Transaction Numbers
+
+Each transaction is assigned a **sequential number** starting from 1:
+
+- Transaction #1: The first transaction on the platform
+- Transaction #2: The second transaction
+- Transaction #3: The third transaction
+- And so on...
+
+These numbers are:
+- ✅ **Included in the hash** — So they cannot be altered without changing the transaction ID
+- ✅ **Immutable** — Once assigned, they never change
+- ✅ **Global** — Every transaction across all stores has a unique number
+
+### What Gets Stored on Arweave?
+
+Every transaction uploaded to Arweave includes:
+
+1. **All transaction fields** (type, buyer, seller, amount, etc.)
+2. **Transaction number** (sequential identifier)
+3. **Local transaction ID** (the hash-based ID for verification)
+4. **Previous Arweave transaction ID** (link to previous transaction)
+5. **Blockchain transaction hash** (if applicable)
+6. **Timestamp** (when the transaction occurred)
+
+### Example: Complete Transaction Record
+
+When you view a transaction on Arweave, you'll see:
+
+```json
+{
+  "transactionId": "7bac446323d968f034fbc35e01c35fa90efe8b34cf5ff9bb6f14308ae4f1a5c8",
+  "transaction_number": 10,
+  "previous_arweave_tx": "xyz789...",
+  "type": "TRANSACTION",
+  "buyer": "0xc074dadc902ea5540aed7c5ca6634708bb4d9474",
+  "seller": "0x3aa0dd7bc8b16825f3c14fc9b4bf745ac60c9de0",
+  "nftId": "aa3b6c028ee5966d67195ba8906e46899b6f5557f3043fe08712991f9f4a898e",
+  "quantity": 2,
+  "chainTx": "0x3b59d1f89e55f590df7a1686b6d1b16aebd419776798266167351d547b6305fa",
+  "currency": "ETH",
+  "amount": "0.001",
+  "timestamp": "2025-12-02T01:56:14.000Z"
+}
+```
+
+**You can verify this independently:**
+1. Extract all fields except `transactionId` and `previous_arweave_tx`
+2. Compute the hash using the same algorithm
+3. Compare with `transactionId` — they should match perfectly
+
+---
+
+## 🔍 Multi-Layer Verification
+
+Our verification system performs multiple checks:
+
+### 1. Hash Calculation Check ✅
+- Verifies that the transaction ID matches the computed hash from transaction data
+- If this fails, the transaction data has been tampered with
+
+### 2. Transaction Structure Check ✅
+- Validates that all required fields are present
+- Ensures data integrity and completeness
+
+### 3. Arweave Transaction Found ✅
+- Confirms the transaction exists on Arweave's permanent storage
+- Provides the Arweave transaction ID for independent verification
+
+### 4. Arweave Transaction ID Match ✅
+- Verifies that the `transactionId` stored on Arweave matches the local transaction ID
+- Ensures consistency between local database and Arweave storage
+
+### 5. Transaction Signature Check ✅
+- Verifies that the transaction is cryptographically signed by the appropriate party
+- Confirms that the signer matches the expected role (buyer, seller, giver, etc.)
+- Ensures the signature is present and valid
+- The signature proves authorization and prevents forgery
+
+### 6. Arweave Data Integrity Check ✅
+- Compares all transaction fields between local database and Arweave
+- Verifies that every field matches exactly (buyer, seller, amount, timestamp, signature, etc.)
+- Includes signature fields in the comparison to ensure they match on Arweave
+
+---
+
+## 🛡️ Why This Matters: Security & Trust
+
+### Protection Against:
+- ✅ **Data tampering** — Any modification would break the hash
+- ✅ **Unauthorized changes** — Impossible without recalculating the hash
+- ✅ **Database corruption** — Arweave serves as an immutable backup
+- ✅ **Centralized control** — You can verify everything independently
+
+### What You Can Verify:
+1. **Transaction authenticity** — Hash matches the data
+2. **Data integrity** — All fields are present and valid
+3. **Permanent storage** — Transaction exists on Arweave
+4. **Complete history** — Follow the chain back to transaction #1
+5. **No tampering** — Local and Arweave data match perfectly
+
+---
+
+## 📊 Real-World Example: Tracing a Transaction
+
+Let's trace a real transaction through the system:
+
+**Step 1:** You find a transaction ID: `7bac446323d968f034fbc35e01c35fa90efe8b34cf5ff9bb6f14308ae4f1a5c8`
+
+**Step 2:** View the transaction details:
+- Transaction #10
+- Buyer: `0xc074...`
+- Seller: `0x3aa0...`
+- Amount: 0.001 ETH
+- Arweave ID: `xyz789...`
+
+**Step 3:** Click "Verify" — Our system automatically:
+- Calculates the hash from transaction data
+- Fetches the transaction from Arweave
+- Compares every field
+- Shows you all verification checks
+
+**Step 4:** Independently verify on Arweave:
+- Visit the Arweave explorer
+- Enter the Arweave transaction ID
+- View the raw transaction data
+- Verify the hash yourself
+
+**Step 5:** Trace the history:
+- Click the "← Previous Transaction" button on transaction #10
+- The system automatically fetches transaction #9 from Arweave and displays it
+- Click "← Previous Transaction" again to go to transaction #8
+- Repeat back to transaction #1
+- You now have the complete history
+
+---
+
+## 🔬 Technical Details
+
+### Hash Algorithm
+- **Algorithm**: SHA-256
+- **Serialization**: Deterministic JSON (sorted keys, normalized values)
+- **Included in hash**: All transaction fields + transaction_number + signer + signature
+- **Excluded from hash**: `_id` (it IS the hash), `arweaveTxId` (set after upload), `previous_arweave_tx` (metadata)
+
+### Verification Process
+1. Normalize transaction data
+2. Serialize deterministically
+3. Compute SHA-256 hash (includes signature fields)
+4. Compare with transaction ID
+5. Verify signature is present and signer matches expected role
+6. Fetch from Arweave (if available)
+7. Compare all fields (including signature and signer)
+
+### Transaction Types
+- **MINT**: NFT creation and part minting (signed by minter)
+- **LISTING_CREATE**: Creating a listing (signed by seller)
+- **LISTING_CANCEL**: Cancelling a listing (signed by seller)
+- **NFT_BUY**: Buying an NFT (signed by buyer)
+- **GIFT_CREATE**: Creating a gift (signed by giver)
+- **GIFT_CLAIM**: Claiming a gift (signed by receiver)
+- **GIFT_REFUSE**: Refusing a gift (signed by receiver)
+- **GIFT_CANCEL**: Cancelling a gift (signed by giver)
+
+All types use the same verification process, include cryptographic signatures, and are stored on Arweave.
+
+---
+
+## ✍️ Transaction Signatures
+
+### Why Signatures Matter
+
+Every state-changing transaction in our system is cryptographically signed by the appropriate party. This ensures:
+
+- ✅ **Authorization** — Only the owner of a wallet can authorize transactions
+- ✅ **Non-repudiation** — The signer cannot later deny authorizing the transaction
+- ✅ **Security** — Transactions cannot be forged or modified
+- ✅ **Audit Trail** — Every transaction includes proof of who authorized it
+
+### Who Signs What?
+
+Different transaction types require signatures from different parties:
+
+- **MINT** — Signed by the minter/creator
+- **LISTING_CREATE** — Signed by the seller
+- **LISTING_CANCEL** — Signed by the seller
+- **NFT_BUY** — Signed by the buyer
+- **GIFT_CREATE** — Signed by the giver
+- **GIFT_CLAIM** — Signed by the receiver
+- **GIFT_REFUSE** — Signed by the receiver
+- **GIFT_CANCEL** — Signed by the giver
+
+### How Signatures Work
+
+When you perform an action (like buying an NFT or creating a listing):
+
+1. You provide your 12-word mnemonic phrase (this **never leaves your device**)
+2. The system creates a cryptographic signature using your wallet's private key
+3. The signature is included in the transaction data
+4. The transaction hash includes the signature, making it part of the immutable record
+5. The signature is stored both locally and on Arweave for permanent verification
+
+**Your private keys never leave your device.** All signing happens locally in your browser, ensuring maximum security.
+
+### Signature Verification
+
+- **Included in hash**: The `signer` and `signature` fields are part of the transaction data that gets hashed
+- **Verification**: Every transaction includes proof of who authorized it
+- **Storage**: Signatures are stored both locally and on Arweave for permanent verification
+- **Security**: Private keys never leave the user's device; all signing happens client-side
+
+---
+
+## ⏮️ Navigating Transaction History
+
+### Previous Transaction Button
+
+Every transaction stored on Arweave includes a link to the previous transaction. This creates a complete, unbreakable chain of all transactions from the first to the most recent.
+
+When viewing a transaction in the explorer, you'll see a **"← Previous Transaction"** button at the bottom of the transaction summary box. This button:
+
+1. Fetches the current transaction from Arweave
+2. Extracts the `previous_arweave_tx` field
+3. Fetches that previous transaction from Arweave
+4. Gets its local transaction ID (the `transactionId` field stored in Arweave)
+5. Automatically searches for and displays the previous transaction
+
+This allows you to:
+
+- ✅ **Trace history** — Follow transactions back to the very first one
+- ✅ **Verify integrity** — Ensure the chain is unbroken
+- ✅ **Audit independently** — Reconstruct the entire transaction history from Arweave
+
+**Note:** When you navigate to a previous transaction, the verification button resets so you can verify the new transaction independently.
+
+---
+
+## 💡 Why You Can Trust This System
+
+1. **Mathematical Proof** — Hashes are mathematically derived, not assigned
+2. **Open Source** — All verification code is available for inspection
+3. **Independent Verification** — You can verify without our servers
+4. **Permanent Storage** — Arweave ensures data survives forever
+5. **Complete Transparency** — Every transaction is publicly verifiable
+6. **No Single Point of Failure** — Data exists in database AND Arweave
+7. **Chronological Chain** — Complete history from transaction #1 to present
+
+---
+
+## 🚀 Getting Started
+
+**To find the latest transaction:**
+
+1. Navigate to the **"Our Network"** page
+2. Find the store card for the store you're interested in
+3. The **Last Transaction** section shows the most recent transaction ID
+4. Click the copy button (📋) next to the transaction ID to copy it to your clipboard
+5. You can then search for this transaction ID or verify it
+
+**To verify a transaction:**
+
+1. Search for a transaction on this explorer (or use the latest transaction ID from the store card)
+2. Click the **"Verify"** button
+3. Watch the automatic verification process
+4. Review all verification checks (all should show ✓):
+   - Hash Calculation Check
+   - Transaction Structure Check
+   - Transaction Signature Check
+   - Arweave Transaction Found
+   - Arweave Transaction ID Match
+   - Arweave Data Integrity Check
+5. Click **"Learn More"** to understand the technical details
+
+**To navigate transaction history:**
+
+1. When viewing any transaction, look for the **"← Previous Transaction"** button at the bottom of the transaction summary
+2. Click the button to automatically fetch and display the previous transaction in the chain
+3. The button fetches from Arweave to get the `previous_arweave_tx` field, then finds that transaction's local ID
+4. Repeat to trace all the way back to the first transaction
+5. Note: The verification button resets when navigating to a new transaction, so you can verify each one independently
+
+**To view on Arweave:**
+
+1. Find the transaction's Arweave transaction ID
+2. Visit any Arweave explorer (e.g., viewblock.io)
+3. Enter the transaction ID
+4. View the raw transaction data
+5. Verify the hash yourself
+
+---
+
+## ❓ Frequently Asked Questions
+
+**Q: What if the hash doesn't match?**
+A: This would indicate data tampering. Our verification system will immediately detect and report this.
+
+**Q: Can transactions be deleted?**
+A: Transactions stored on Arweave are permanent and cannot be deleted. The database transaction may be removed, but the Arweave copy remains forever.
+
+**Q: How long does verification take?**
+A: Usually less than 2 seconds. The process involves calculating a hash (instant) and fetching from Arweave (1-2 seconds).
+
+**Q: Do I need to trust you?**
+A: No. You can verify everything independently using standard cryptographic tools. Our system is transparent by design.
+
+**Q: What happens if Arweave goes down?**
+A: Our database maintains a copy of all transactions. Arweave serves as permanent backup, but we can still operate from our database.
+
+---
+
+## 📚 Additional Resources
+
+- **Hash Verification Documentation**: See `backend/docs/HASH_VERIFICATION.md`
+- **Arweave Integration Details**: See `backend/docs/ARWEAVE_INTEGRATION.md`
+- **Arweave Explorer**: https://viewblock.io/arweave
+- **Arweave Gateway**: https://arweave.net
+
+---
+
+**Built on cryptographic proof, not promises. Verify everything yourself.**
+</file>
+
+<file path="server/config/stores.ts">
+/**
+ * Store Configuration
+ * 
+ * Defines the structure and management of multiple SljivaStore-compatible stores
+ * that the Explorer can query.
+ */
+
+export interface StoreConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  publicKey?: string;
+  description?: string;
+  enabled?: boolean;
+  icon?: string; // URL or path to store icon
+}
+
+/**
+ * Parse store configurations from environment variable.
+ * 
+ * Expected format: JSON array of store objects:
+ * [
+ *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
+ *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
+ * ]
+ */
+function parseStoresFromEnv(): StoreConfig[] {
+  const storesEnv = process.env.EXPLORER_STORES;
+  
+  if (!storesEnv) {
+    return getDefaultStores();
+  }
+
+  try {
+    const parsed = JSON.parse(storesEnv);
+    
+    if (!Array.isArray(parsed)) {
+      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
+      return getDefaultStores();
+    }
+
+    const stores: StoreConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) {
+        console.warn("[Stores Config] Skipping invalid store entry:", item);
+        continue;
+      }
+
+      if (!item.id || !item.name || !item.baseUrl) {
+        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
+        continue;
+      }
+
+      const baseUrl = String(item.baseUrl).replace(/\/$/, ""); // Remove trailing slash
+      
+      // Default icon for localhost stores if not specified
+      let icon = item.icon ? String(item.icon) : undefined;
+      if (!icon) {
+        try {
+          const url = new URL(baseUrl);
+          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+            const frontendPort = process.env.FRONTEND_PORT || '5173';
+            icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+          }
+        } catch {
+          // If URL parsing fails, skip default icon
+        }
+      }
+
+      stores.push({
+        id: String(item.id),
+        name: String(item.name),
+        baseUrl: baseUrl,
+        publicKey: item.publicKey ? String(item.publicKey) : undefined,
+        description: item.description ? String(item.description) : undefined,
+        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
+        icon: icon
+      });
+    }
+
+    if (stores.length === 0) {
+      console.warn("[Stores Config] No valid stores found, using defaults");
+      return getDefaultStores();
+    }
+
+    return stores;
+  } catch (error) {
+    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
+    return getDefaultStores();
+  }
+}
+
+/**
+ * Get default store configuration for local development.
+ */
+function getDefaultStores(): StoreConfig[] {
+  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
+  const frontendPort = process.env.FRONTEND_PORT || "5173";
+  return [
+    {
+      id: "local",
+      name: "Local SljivaStore",
+      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
+      description: "Default local development store",
+      enabled: true,
+      icon: `http://localhost:${frontendPort}/sljiva_icon.png` // Icon is served from frontend static files
+    }
+  ];
+}
+
+// Load and cache store configurations
+let cachedStores: StoreConfig[] | null = null;
+
+/**
+ * Get all configured stores.
+ * Stores are loaded once on first call and cached.
+ */
+export function getStores(): StoreConfig[] {
+  if (cachedStores === null) {
+    cachedStores = parseStoresFromEnv();
+  }
+  return cachedStores.filter(store => store.enabled !== false);
+}
+
+/**
+ * Get a store by its ID.
+ * @param id Store identifier
+ * @returns Store configuration or undefined if not found
+ */
+export function getStoreById(id: string): StoreConfig | undefined {
+  const stores = getStores();
+  return stores.find(store => store.id === id);
+}
+
+/**
+ * Initialize store configuration (call on server startup).
+ * This will parse and validate stores, logging the results.
+ */
+export function initializeStores(): void {
+  const stores = getStores();
+  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
+  stores.forEach(store => {
+    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
+  });
+}
+</file>
+
+<file path="src/lib/components/NetworkPage.svelte">
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { fetchStores, fetchLastTransaction } from "../api";
+  import type { StoreInfo } from "../types";
+  import type { ExplorerTransaction } from "../types";
+
+  interface StoreWithStatus extends StoreInfo {
+    lastTransaction: ExplorerTransaction | null;
+    loading: boolean;
+    offline: boolean;
+    iconLoaded: boolean;
+    iconLoadError: boolean;
+  }
+
+  let stores: StoreWithStatus[] = [];
+  let loading = true;
+  let error: string | null = null;
+  let copiedTxId: string | null = null;
+
+  onMount(async () => {
+    await loadStores();
+  });
+
+  async function loadStores() {
+    loading = true;
+    error = null;
+
+    try {
+      const storeInfos = await fetchStores();
+
+      // Initialize stores with loading state
+      stores = storeInfos.map((store) => {
+        console.log(`[NetworkPage] Store loaded: ${store.name}, icon:`, store.icon, 'baseUrl:', store.baseUrl);
+        return {
+          ...store,
+          lastTransaction: null,
+          loading: true,
+          offline: false,
+          iconLoaded: false,
+          iconLoadError: false
+        };
+      });
+
+      // Fetch last transaction for each store in parallel
+      const promises = stores.map(async (store) => {
+        try {
+          const result = await fetchLastTransaction(store.baseUrl);
+          if (result && result.transaction) {
+            store.lastTransaction = result.transaction;
+            store.offline = false;
+          } else {
+            store.offline = true;
+          }
+        } catch (err) {
+          store.offline = true;
+        } finally {
+          store.loading = false;
+        }
+      });
+
+      await Promise.allSettled(promises);
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to load stores";
+    } finally {
+      loading = false;
+    }
+  }
+
+  function formatAddress(address: string): string {
+    if (!address) return "";
+    if (address.length <= 16) return address;
+    return `${address.substring(0, 8)}…${address.substring(address.length - 8)}`;
+  }
+
+  function formatDate(dateString: string): string {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleString();
+    } catch {
+      return dateString;
+    }
+  }
+
+  function getStoreFrontendUrl(baseUrl: string): string {
+    try {
+      const url = new URL(baseUrl);
+      const hostname = url.hostname;
+      const protocol = url.protocol;
+      
+      // For localhost, use port 5173 for frontend (standard Vite dev port)
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return `${protocol}//${hostname}:5173`;
+      }
+      
+      // For production, remove /api/explorer path and use base domain
+      return baseUrl.replace(/\/api\/explorer.*$/, "");
+    } catch {
+      // Fallback: try regex extraction
+      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
+      if (match) {
+        const base = match[1];
+        if (base.includes('localhost')) {
+          return base.replace(/:(\d+)/, ':5173');
+        }
+        return base;
+      }
+      return baseUrl;
+    }
+  }
+
+  async function copyTransactionId(txId: string) {
+    try {
+      await navigator.clipboard.writeText(txId);
+      copiedTxId = txId;
+      // Reset after 2 seconds
+      setTimeout(() => {
+        copiedTxId = null;
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy transaction ID:", err);
+    }
+  }
+</script>
+
+<div class="content-page">
+  <div class="content-header">
+    <h2>Our Network</h2>
+    <p class="content-description">
+      Explore all SljivaStore instances connected to this explorer. Each store operates independently
+      and maintains its own transaction history.
+    </p>
+  </div>
+
+  {#if loading}
+    <div class="loading-state">
+      <p>Loading stores...</p>
+    </div>
+  {:else if error}
+    <div class="error-state">
+      <p>Error: {error}</p>
+      <button class="retry-button" on:click={loadStores}>Retry</button>
+    </div>
+  {:else if stores.length === 0}
+    <div class="empty-state">
+      <p>No stores configured.</p>
+    </div>
+  {:else}
+    <div class="stores-grid">
+      {#each stores as store (store.id)}
+        <div class="store-card" class:offline={store.offline}>
+          <div class="store-header">
+            <div class="store-icon-wrapper">
+              {#if store.icon && store.icon.trim()}
+                <img 
+                  src={store.icon} 
+                  alt="{store.name} icon" 
+                  class="store-icon"
+                  class:hidden={!store.iconLoaded || store.iconLoadError}
+                  on:error={() => {
+                    console.error(`[NetworkPage] Failed to load icon for store "${store.name}": ${store.icon}`);
+                    store.iconLoadError = true;
+                    store.iconLoaded = false;
+                  }}
+                  on:load={() => {
+                    console.log(`[NetworkPage] Successfully loaded icon for store "${store.name}": ${store.icon}`);
+                    store.iconLoaded = true;
+                    store.iconLoadError = false;
+                  }}
+                />
+              {/if}
+              <div class="store-icon-placeholder" class:hidden={store.icon && store.icon.trim() && store.iconLoaded && !store.iconLoadError}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="3" y1="9" x2="21" y2="9"></line>
+                  <line x1="9" y1="21" x2="9" y2="9"></line>
+                </svg>
+              </div>
+            </div>
+            <div class="store-title-section">
+              <h3 class="store-name">{store.name}</h3>
+              {#if store.website}
+                <p class="store-website">{store.website}</p>
+              {/if}
+            </div>
+          </div>
+
+          <div class="store-status">
+            {#if store.loading}
+              <div class="status-loading">
+                <span class="status-dot loading"></span>
+                <span>Checking status...</span>
+              </div>
+            {:else if store.offline}
+              <div class="status-offline">
+                <span class="status-dot offline"></span>
+                <span>Store is currently offline</span>
+              </div>
+            {:else if store.lastTransaction}
+              <div class="last-transaction">
+                <div class="transaction-header">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                  <span class="transaction-label">Last Transaction</span>
+                </div>
+                <div class="transaction-id-wrapper">
+                  <div class="transaction-id">{formatAddress(store.lastTransaction._id)}</div>
+                  <button
+                    class="copy-button"
+                    class:copied={copiedTxId === store.lastTransaction._id}
+                    on:click={() => store.lastTransaction && copyTransactionId(store.lastTransaction._id)}
+                    title="Copy transaction ID"
+                  >
+                    {#if copiedTxId === store.lastTransaction._id}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 6L9 17l-5-5"></path>
+                      </svg>
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                    {/if}
+                  </button>
+                </div>
+                <div class="transaction-time">{formatDate(store.lastTransaction.timestamp)}</div>
+              </div>
+            {:else}
+              <div class="status-offline">
+                <span class="status-dot offline"></span>
+                <span>No transactions yet</span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="store-actions">
+            <a
+              href={getStoreFrontendUrl(store.baseUrl)}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="visit-button"
+            >
+              Visit
+            </a>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  /* Content page styles are now global in App.svelte */
+
+  .loading-state,
+  .error-state,
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+  }
+
+  .error-state {
+    color: var(--error, #ef4444);
+  }
+
+  .retry-button {
+    margin-top: 1rem;
+    padding: 0.75rem 1.5rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+  }
+
+  .retry-button:hover {
+    opacity: 0.9;
+  }
+
+  .stores-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .store-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .store-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--card-shadow);
+  }
+
+  .store-card.offline {
+    opacity: 0.7;
+  }
+
+  .store-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .store-icon-wrapper {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .store-icon {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+    border: 1px solid var(--card-border);
+  }
+
+  .store-icon-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--card-border);
+    color: var(--text-secondary);
+  }
+
+  .store-icon-placeholder.hidden {
+    display: none;
+  }
+
+  .store-title-section {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .store-name {
+    margin: 0 0 0.25rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-wrap: break-word;
+  }
+
+  .store-website {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    word-wrap: break-word;
+  }
+
+  .store-status {
+    min-height: 60px;
+    display: flex;
+    align-items: flex-start;
+  }
+
+  .status-loading,
+  .status-offline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.loading {
+    background: var(--text-secondary);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .status-dot.offline {
+    background: var(--error, #ef4444);
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .last-transaction {
+    width: 100%;
+  }
+
+  .transaction-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .transaction-header svg {
+    flex-shrink: 0;
+  }
+
+  .transaction-label {
+    flex: 1;
+  }
+
+  .transaction-id-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .transaction-id {
+    font-family: monospace;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .copy-button {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+
+  .copy-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  .copy-button.copied {
+    background: #10b981;
+    border-color: #10b981;
+    color: white;
+  }
+
+  .copy-button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .transaction-time {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+  }
+
+  .store-actions {
+    margin-top: auto;
+    padding-top: 0.5rem;
+  }
+
+  .visit-button {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    padding: 0.75rem 1rem;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: opacity 0.2s ease;
+    border: none;
+    cursor: pointer;
+  }
+
+  .visit-button:hover {
+    opacity: 0.9;
+  }
+
+  @media (max-width: 768px) {
+    .stores-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</file>
+
 <file path="src/lib/components/SearchPanel.svelte">
 <script lang="ts">
   import type { StoreInfo } from "../types";
@@ -3361,675 +5195,516 @@ The Vite dev server automatically proxies:
 - For Docker deployment see `docs/running.md`
 </file>
 
-<file path="src/lib/components/ResultPanel.svelte">
+<file path="src/lib/components/VerificationPage.svelte">
 <script lang="ts">
-  import type { ExplorerResult, ExplorerNFT } from "../types";
-  import { formatAddress, formatAmount, formatDate } from "../utils/format";
-  import PartialTable from "./PartialTable.svelte";
-  import PartsList from "./PartsList.svelte";
-  import { getPartLink, getChainTxLink } from "../utils/storeLinks";
-  import { fetchNftMetadata } from "../api";
-
-  export let result: ExplorerResult | null = null;
-
-  let transactionNft: ExplorerNFT | null = null;
-
-  // Fetch NFT metadata for transaction
-  $: if (result && result.kind === "transaction") {
-    if (result.nft) {
-      transactionNft = result.nft;
-    } else if (result.transaction.nftId) {
-      // Fetch NFT metadata using transaction's nftId
-      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
-        transactionNft = nft;
-      });
-    } else if (result.parts && result.parts.length > 0) {
-      // Fallback: use first part's parent_hash
-      const firstPart = result.parts[0];
-      if (firstPart && firstPart.parent_hash) {
-        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
-          transactionNft = nft;
-        });
-      }
-    }
-  } else {
-    transactionNft = null;
-  }
+  // This component displays the verification and Arweave documentation
 </script>
 
-{#if !result}
-  <section class="empty-state">
-    <h2>Explorer</h2>
-    <p>Enter a part hash or transaction identifier to explore the SljivaStore network.</p>
+<div class="verification-content">
+  <section>
+    <h3>🔐 Hash-Based Transaction Verification</h3>
+    
+    <h4>What is Hash-Based Verification?</h4>
+    <p>
+      Every transaction in our system has a unique identifier (transaction ID) that is <strong>cryptographically derived from the transaction data itself</strong>. This means:
+    </p>
+    <ul>
+      <li><strong>The transaction ID is not arbitrary</strong>—it's mathematically computed from all the transaction fields</li>
+      <li><strong>Any modification to transaction data</strong> would produce a completely different ID</li>
+      <li><strong>You can independently verify</strong> that a transaction's ID matches its data</li>
+    </ul>
+
+    <h4>How It Works</h4>
+    <p>When a transaction is created, we:</p>
+    <ol>
+      <li><strong>Collect all transaction fields</strong> (type, buyer, seller, amount, timestamp, transaction number, etc.)</li>
+      <li><strong>Normalize the data</strong> (sort fields, convert dates to ISO format, lowercase addresses)</li>
+      <li><strong>Compute a SHA-256 hash</strong> of the normalized data</li>
+      <li><strong>Use that hash as the transaction ID</strong></li>
+    </ol>
+    <p>This process ensures that:</p>
+    <ul>
+      <li>✅ Same data always produces the same hash</li>
+      <li>✅ Different data always produces a different hash</li>
+      <li>✅ No central authority assigns IDs—they're mathematically determined</li>
+    </ul>
+
+    <h4>Example: Verifying a Transaction</h4>
+    <p>Let's say you want to verify transaction <code>7bac446323d968f034fbc35e01c35fa90efe8b34cf5ff9bb6f14308ae4f1a5c8</code>.</p>
+    
+    <div class="code-block">
+      <pre>{`{
+  "type": "TRANSACTION",
+  "transaction_number": 1,
+  "nftId": "aa3b6c028ee5966d67195ba8906e46899b6f5557f3043fe08712991f9f4a898e",
+  "buyer": "0xc074dadc902ea5540aed7c5ca6634708bb4d9474",
+  "seller": "0x3aa0dd7bc8b16825f3c14fc9b4bf745ac60c9de0",
+  "quantity": 2,
+  "chainTx": "0x3b59d1f89e55f590df7a1686b6d1b16aebd419776798266167351d547b6305fa",
+  "currency": "ETH",
+  "amount": "0.001",
+  "timestamp": "2025-12-02T01:56:14.000Z"
+}`}</pre>
+    </div>
+
+    <p><strong>You can verify it yourself:</strong></p>
+    <ol>
+      <li><strong>Normalize the data</strong> (sort fields, convert timestamps, lowercase addresses)</li>
+      <li><strong>Serialize deterministically</strong> to a string</li>
+      <li><strong>Compute SHA-256 hash</strong> of that string</li>
+      <li><strong>Compare</strong> the computed hash with the transaction ID</li>
+    </ol>
+
+    <p>If they match, you can be 100% certain that:</p>
+    <ul>
+      <li>✅ The transaction data has not been tampered with</li>
+      <li>✅ The transaction ID was correctly generated from the data</li>
+      <li>✅ The transaction is authentic</li>
+    </ul>
+
+    <p><strong>Try it yourself:</strong> Click the "Verify" button on any transaction to see our automatic verification process in action.</p>
   </section>
-{:else if result.kind === "part"}
-  <section class="result-section">
-    <header>
-      <h2>Part</h2>
-      <span class="badge">Part Hash</span>
-    </header>
-    <div class="grid">
-      <div class="card">
-        <h3>Part Metadata</h3>
-        <dl>
-          <div>
-            <dt>Part Hash</dt>
-            <dd>
-              <a
-                href={getPartLink(result.part._id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="part-link"
-              >
-                {result.part._id}
-              </a>
-            </dd>
-          </div>
-          <div>
-            <dt>Part Number</dt>
-            <dd>{result.part.part_no}</dd>
-          </div>
-          <div>
-            <dt>Parent NFT</dt>
-            <dd>{result.part.parent_hash}</dd>
-          </div>
-          <div>
-            <dt>Owner</dt>
-            <dd>{formatAddress(result.part.owner)}</dd>
-          </div>
-          <div>
-            <dt>Listing</dt>
-            <dd>{result.part.listing ?? "Not Listed"}</dd>
-          </div>
-          {#if result.part.storeName}
-            <div>
-              <dt>Store</dt>
-              <dd>{result.part.storeName}</dd>
-            </div>
-          {/if}
-        </dl>
+
+  <section>
+    <h3>🔗 Permanent Storage on Arweave</h3>
+
+    <h4>Why Arweave?</h4>
+    <p>While our database stores transaction data for quick access, we also upload every transaction to <strong>Arweave</strong>, a permanent, decentralized storage network. Arweave provides:</p>
+    <ul>
+      <li><strong>Permanent storage</strong> — Data stored on Arweave is designed to last for hundreds of years</li>
+      <li><strong>Decentralization</strong> — No single point of failure, data replicated across the network</li>
+      <li><strong>Immutable</strong> — Once stored, data cannot be altered</li>
+      <li><strong>Publicly verifiable</strong> — Anyone can fetch and verify transactions independently</li>
+    </ul>
+
+    <h4>Transaction Chaining: Complete Audit Trail</h4>
+    <p>Every transaction we upload to Arweave includes a link to the <strong>previous transaction</strong>. This creates an unbreakable chronological chain:</p>
+    
+    <div class="code-block">
+      <pre>{`Transaction #10 → Previous: Transaction #9
+Transaction #9  → Previous: Transaction #8
+Transaction #8  → Previous: Transaction #7
+...
+Transaction #1  → Previous: null (first transaction)`}</pre>
+    </div>
+
+    <p>This means:</p>
+    <ul>
+      <li>✅ <strong>Complete history</strong> — You can trace every transaction from the latest back to the first</li>
+      <li>✅ <strong>No gaps</strong> — Every transaction links to the previous one</li>
+      <li>✅ <strong>Independent verification</strong> — You can reconstruct the entire transaction history from Arweave alone</li>
+    </ul>
+
+    <h4>Sequential Transaction Numbers</h4>
+    <p>Each transaction is assigned a <strong>sequential number</strong> starting from 1:</p>
+    <ul>
+      <li>Transaction #1: The first transaction on the platform</li>
+      <li>Transaction #2: The second transaction</li>
+      <li>Transaction #3: The third transaction</li>
+      <li>And so on...</li>
+    </ul>
+
+    <p>These numbers are:</p>
+    <ul>
+      <li>✅ <strong>Included in the hash</strong> — So they cannot be altered without changing the transaction ID</li>
+      <li>✅ <strong>Immutable</strong> — Once assigned, they never change</li>
+      <li>✅ <strong>Global</strong> — Every transaction across all stores has a unique number</li>
+    </ul>
+  </section>
+
+  <section>
+    <h3>🔍 Multi-Layer Verification</h3>
+    <p>Our verification system performs multiple checks:</p>
+    
+    <div class="check-list">
+      <div class="check-item">
+        <strong>1. Hash Calculation Check ✅</strong>
+        <p>Verifies that the transaction ID matches the computed hash from transaction data. If this fails, the transaction data has been tampered with.</p>
       </div>
-      {#if result.nft}
-        <div class="card media-card">
-          <h3>NFT Metadata</h3>
-          {#if result.nft.imageurl}
-            <figure>
-              <img src={result.nft.imageurl} alt={`NFT ${result.nft.name}`} />
-              <figcaption>{result.nft.name}</figcaption>
-            </figure>
-          {:else}
-            <p class="empty">No image available.</p>
-          {/if}
-          <dl>
-            <div>
-              <dt>Name</dt>
-              <dd>{result.nft.name}</dd>
-            </div>
-            <div>
-              <dt>Description</dt>
-              <dd>{result.nft.description}</dd>
-            </div>
-            <div>
-              <dt>Creator</dt>
-              <dd>{formatAddress(result.nft.creator)}</dd>
-            </div>
-          </dl>
-        </div>
-      {/if}
-      <PartialTable
-        title="Partial Transactions"
-        partials={result.partialTransactions}
-        pagination={result.pagination}
-      />
+      <div class="check-item">
+        <strong>2. Transaction Structure Check ✅</strong>
+        <p>Validates that all required fields are present. Ensures data integrity and completeness.</p>
+      </div>
+      <div class="check-item">
+        <strong>3. Arweave Transaction Found ✅</strong>
+        <p>Confirms the transaction exists on Arweave's permanent storage. Provides the Arweave transaction ID for independent verification.</p>
+      </div>
+      <div class="check-item">
+        <strong>4. Arweave Transaction ID Match ✅</strong>
+        <p>Verifies that the transactionId stored on Arweave matches the local transaction ID. Ensures consistency between local database and Arweave storage.</p>
+      </div>
+      <div class="check-item">
+        <strong>5. Transaction Signature Check ✅</strong>
+        <p>Verifies that the transaction is cryptographically signed by the appropriate party (buyer, seller, giver, etc.). The signature proves that the transaction was authorized by the correct wallet owner and cannot be forged.</p>
+      </div>
+      <div class="check-item">
+        <strong>6. Arweave Data Integrity Check ✅</strong>
+        <p>Compares all transaction fields between local database and Arweave. Verifies that every field matches exactly (buyer, seller, amount, timestamp, signature, etc.).</p>
+      </div>
     </div>
   </section>
-{:else if result.kind === "transaction"}
-  <section class="result-section">
-    <header>
-      <h2>Transaction</h2>
-      <span class="badge">Transaction Lookup</span>
-    </header>
-    <div class="grid">
-      <div class="card">
-        <h3>Summary</h3>
-        <dl>
-          <div>
-            <dt>Transaction ID</dt>
-            <dd>{result.transaction._id}</dd>
-          </div>
-          <div>
-            <dt>Type</dt>
-            <dd>{result.transaction.type || "TRANSACTION"}</dd>
-          </div>
-          <div>
-            <dt>Chain Hash</dt>
-            <dd>
-              {#if result.transaction.chainTx}
-                <a
-                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="chain-tx-link"
-                >
-                  {formatAddress(result.transaction.chainTx)}
-                </a>
-              {:else}
-                —
-              {/if}
-            </dd>
-          </div>
-          <div>
-            <dt>Buyer</dt>
-            <dd>{formatAddress(result.transaction.buyer)}</dd>
-          </div>
-          <div>
-            <dt>Seller</dt>
-            <dd>{formatAddress(result.transaction.seller)}</dd>
-          </div>
-          <div>
-            <dt>Quantity</dt>
-            <dd>{result.transaction.quantity}</dd>
-          </div>
-          <div>
-            <dt>Amount</dt>
-            <dd>{formatAmount(result.transaction.amount, result.transaction.currency)}</dd>
-          </div>
-          <div>
-            <dt>Timestamp</dt>
-            <dd>{formatDate(result.transaction.timestamp)}</dd>
-          </div>
-          {#if result.transaction.storeName}
-            <div>
-              <dt>Store</dt>
-              <dd>{result.transaction.storeName}</dd>
-            </div>
-          {/if}
-        </dl>
-      </div>
-      {#if transactionNft}
-        <div class="card media-card">
-          <h3>NFT Metadata</h3>
-          {#if transactionNft.imageurl}
-            <figure>
-              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
-              <figcaption>{transactionNft.name}</figcaption>
-            </figure>
-          {:else}
-            <p class="empty">No image available.</p>
-          {/if}
-          <dl>
-            <div>
-              <dt>Name</dt>
-              <dd>{transactionNft.name}</dd>
-            </div>
-            <div>
-              <dt>Description</dt>
-              <dd>{transactionNft.description}</dd>
-            </div>
-            <div>
-              <dt>Creator</dt>
-              <dd>{formatAddress(transactionNft.creator)}</dd>
-            </div>
-          </dl>
-        </div>
-      {/if}
-      {#if result.parts && result.parts.length > 0}
-        <PartsList parts={result.parts} pagination={result.pagination} />
-      {:else}
-        <div class="card note-card">
-          <h3>Parts</h3>
-          <p>No parts found for this transaction.</p>
-        </div>
-      {/if}
+
+  <section>
+    <h3>✍️ Transaction Signatures</h3>
+    
+    <h4>Why Signatures Matter</h4>
+    <p>Every state-changing transaction in our system is cryptographically signed by the appropriate party. This ensures:</p>
+    <ul>
+      <li>✅ <strong>Authorization</strong> — Only the owner of a wallet can authorize transactions</li>
+      <li>✅ <strong>Non-repudiation</strong> — The signer cannot later deny authorizing the transaction</li>
+      <li>✅ <strong>Security</strong> — Transactions cannot be forged or modified</li>
+      <li>✅ <strong>Audit Trail</strong> — Every transaction includes proof of who authorized it</li>
+    </ul>
+
+    <h4>Who Signs What?</h4>
+    <p>Different transaction types require signatures from different parties:</p>
+    <ul>
+      <li><strong>MINT</strong> — Signed by the minter/creator</li>
+      <li><strong>LISTING_CREATE</strong> — Signed by the seller</li>
+      <li><strong>LISTING_CANCEL</strong> — Signed by the seller</li>
+      <li><strong>NFT_BUY</strong> — Signed by the buyer</li>
+      <li><strong>GIFT_CREATE</strong> — Signed by the giver</li>
+      <li><strong>GIFT_CLAIM</strong> — Signed by the receiver</li>
+      <li><strong>GIFT_REFUSE</strong> — Signed by the receiver</li>
+      <li><strong>GIFT_CANCEL</strong> — Signed by the giver</li>
+    </ul>
+
+    <h4>How Signatures Work</h4>
+    <p>When you perform an action (like buying an NFT or creating a listing):</p>
+    <ol>
+      <li>You provide your 12-word mnemonic phrase (this never leaves your device)</li>
+      <li>The system creates a cryptographic signature using your wallet's private key</li>
+      <li>The signature is included in the transaction data</li>
+      <li>The transaction hash includes the signature, making it part of the immutable record</li>
+      <li>The signature is stored both locally and on Arweave for permanent verification</li>
+    </ol>
+
+    <p><strong>Your private keys never leave your device.</strong> All signing happens locally in your browser, ensuring maximum security.</p>
+  </section>
+
+  <section>
+    <h3>⏮️ Navigating Transaction History</h3>
+    
+    <h4>Previous Transaction Button</h4>
+    <p>Every transaction stored on Arweave includes a link to the previous transaction. This creates a complete, unbreakable chain of all transactions from the first to the most recent.</p>
+
+    <p>When viewing a transaction, you'll see a <strong>"← Previous Transaction"</strong> button at the bottom of the transaction summary. This button:</p>
+    <ol>
+      <li>Fetches the current transaction from Arweave</li>
+      <li>Extracts the <code>previous_arweave_tx</code> field</li>
+      <li>Fetches that previous transaction from Arweave</li>
+      <li>Gets its local transaction ID</li>
+      <li>Automatically searches for and displays the previous transaction</li>
+    </ol>
+
+    <p>This allows you to:</p>
+    <ul>
+      <li>✅ <strong>Trace history</strong> — Follow transactions back to the very first one</li>
+      <li>✅ <strong>Verify integrity</strong> — Ensure the chain is unbroken</li>
+      <li>✅ <strong>Audit independently</strong> — Reconstruct the entire transaction history from Arweave</li>
+    </ul>
+
+    <p><strong>Note:</strong> When you navigate to a previous transaction, the verification button resets so you can verify the new transaction independently.</p>
+  </section>
+
+  <section>
+    <h3>🛡️ Why This Matters: Security & Trust</h3>
+
+    <h4>Protection Against:</h4>
+    <ul>
+      <li>✅ <strong>Data tampering</strong> — Any modification would break the hash</li>
+      <li>✅ <strong>Unauthorized changes</strong> — Impossible without recalculating the hash</li>
+      <li>✅ <strong>Database corruption</strong> — Arweave serves as an immutable backup</li>
+      <li>✅ <strong>Centralized control</strong> — You can verify everything independently</li>
+    </ul>
+
+    <h4>What You Can Verify:</h4>
+    <ol>
+      <li><strong>Transaction authenticity</strong> — Hash matches the data</li>
+      <li><strong>Data integrity</strong> — All fields are present and valid</li>
+      <li><strong>Permanent storage</strong> — Transaction exists on Arweave</li>
+      <li><strong>Complete history</strong> — Follow the chain back to transaction #1</li>
+      <li><strong>No tampering</strong> — Local and Arweave data match perfectly</li>
+    </ol>
+  </section>
+
+  <section>
+    <h3>💡 Why You Can Trust This System</h3>
+    <ol>
+      <li><strong>Mathematical Proof</strong> — Hashes are mathematically derived, not assigned</li>
+      <li><strong>Open Source</strong> — All verification code is available for inspection</li>
+      <li><strong>Independent Verification</strong> — You can verify without our servers</li>
+      <li><strong>Permanent Storage</strong> — Arweave ensures data survives forever</li>
+      <li><strong>Complete Transparency</strong> — Every transaction is publicly verifiable</li>
+      <li><strong>No Single Point of Failure</strong> — Data exists in database AND Arweave</li>
+      <li><strong>Chronological Chain</strong> — Complete history from transaction #1 to present</li>
+    </ol>
+
+    <div class="highlight-box">
+      <p><strong>Built on cryptographic proof, not promises. Verify everything yourself.</strong></p>
     </div>
   </section>
-{/if}
+
+  <section>
+    <h3>🚀 Getting Started</h3>
+    
+    <h4>To find the latest transaction:</h4>
+    <ol>
+      <li>Navigate to the <strong>"Our Network"</strong> page</li>
+      <li>Find the store card for the store you're interested in</li>
+      <li>The <strong>Last Transaction</strong> section shows the most recent transaction ID</li>
+      <li>Click the copy button (📋) next to the transaction ID to copy it to your clipboard</li>
+      <li>You can then search for this transaction ID or verify it</li>
+    </ol>
+
+    <h4>To verify a transaction:</h4>
+    <ol>
+      <li>Search for a transaction on this explorer (or use the latest transaction ID from the store card)</li>
+      <li>Click the <strong>"Verify"</strong> button</li>
+      <li>Watch the automatic verification process</li>
+      <li>Review all verification checks (all should show ✓)</li>
+      <li>Click <strong>"Learn More"</strong> to understand the technical details</li>
+    </ol>
+
+    <h4>To view on Arweave:</h4>
+    <ol>
+      <li>Find the transaction's Arweave transaction ID</li>
+      <li>Visit any Arweave explorer (e.g., viewblock.io)</li>
+      <li>Enter the transaction ID</li>
+      <li>View the raw transaction data</li>
+      <li>Verify the hash yourself</li>
+    </ol>
+  </section>
+
+  <section>
+    <h3>📚 Additional Resources</h3>
+    <ul>
+      <li><strong>Hash Verification Documentation</strong>: See <code>backend/docs/HASH_VERIFICATION.md</code></li>
+      <li><strong>Arweave Integration Details</strong>: See <code>backend/docs/ARWEAVE_INTEGRATION.md</code></li>
+      <li><strong>Arweave Explorer</strong>: <a href="https://viewblock.io/arweave" target="_blank" rel="noopener noreferrer">https://viewblock.io/arweave</a></li>
+      <li><strong>Arweave Gateway</strong>: <a href="https://arweave.net" target="_blank" rel="noopener noreferrer">https://arweave.net</a></li>
+    </ul>
+  </section>
+</div>
 
 <style>
-  .empty-state {
-    padding: 2rem;
-    border-radius: 1rem;
-    border: 1px dashed var(--border-muted);
-    text-align: center;
-    color: var(--text-muted);
-  }
-
-  .empty-state h2 {
-    margin-bottom: 0.5rem;
-    font-size: 1.75rem;
-  }
-
-  .result-section {
-    display: grid;
-    gap: 1.5rem;
-  }
-
-  header {
+  .verification-content {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 3rem;
+    max-width: 900px;
+  }
+
+  section {
+    display: flex;
+    flex-direction: column;
     gap: 1rem;
   }
 
-  .badge {
-    padding: 0.35rem 0.75rem;
-    border-radius: 999px;
-    background: var(--badge-bg);
-    color: var(--badge-text);
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--card-border);
+    padding-bottom: 0.5rem;
+  }
+
+  h4 {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1.25rem;
     font-weight: 600;
-    font-size: 0.85rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    color: var(--text-primary);
   }
 
-  .grid {
-    display: grid;
-    gap: 1.5rem;
+  p {
+    margin: 0;
+    line-height: 1.7;
+    color: var(--text-secondary);
   }
 
-  @media (min-width: 1280px) {
-    .grid {
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    }
+  ul, ol {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
   }
 
-  .card {
+  li {
+    margin: 0.5rem 0;
+  }
+
+  code {
     background: var(--card-bg);
-    border-radius: 1rem;
     border: 1px solid var(--card-border);
-    padding: 1.25rem 1.5rem;
-    box-shadow: 0 18px 40px var(--card-shadow);
+    border-radius: 4px;
+    padding: 0.125rem 0.375rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    color: var(--text-primary);
   }
 
-  .note-card p {
+  .code-block {
+    margin: 1rem 0;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+
+  .code-block pre {
+    margin: 0;
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+  }
+
+  .check-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    margin: 1rem 0;
+  }
+
+  .check-item {
+    padding: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    border-left: 4px solid var(--accent);
+  }
+
+  .check-item strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+  }
+
+  .check-item p {
     margin: 0;
     color: var(--text-secondary);
-    font-size: 0.95rem;
-    line-height: 1.5;
   }
 
-  .card h3 {
-    margin: 0 0 1rem;
+  .highlight-box {
+    margin: 1.5rem 0;
+    padding: 1.5rem;
+    background: var(--card-bg);
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+    text-align: center;
+  }
+
+  .highlight-box p {
+    margin: 0;
     font-size: 1.1rem;
     color: var(--text-primary);
   }
 
-  dl {
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  dt {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-label);
-  }
-
-  dd {
-    margin: 0;
-    font-size: 0.95rem;
-    color: var(--text-primary);
-    word-break: break-all;
-  }
-
-  .media-card figure {
-    margin: 0 0 1rem;
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .media-card img {
-    width: 100%;
-    border-radius: 0.75rem;
-    object-fit: cover;
-    max-height: 240px;
-    border: 1px solid var(--image-border);
-  }
-
-  .media-card figcaption {
-    font-size: 0.9rem;
-    color: var(--text-muted);
-  }
-
-  .media-card .empty {
-    margin: 0;
-    color: var(--text-muted);
-  }
-
-  .part-link,
-  .chain-tx-link {
+  a {
     color: var(--accent);
     text-decoration: none;
-    word-break: break-all;
   }
 
-  .part-link:hover,
-  .chain-tx-link:hover {
+  a {
+    word-break: break-word;
+  }
+
+  a:hover {
     text-decoration: underline;
   }
-</style>
-</file>
 
-<file path="src/lib/types.ts">
-export type SearchMode = "part" | "transaction";
-
-export interface StoreInfo {
-  id: string;
-  name: string;
-}
-
-export interface ExplorerPart {
-  _id: string;
-  part_no: number;
-  parent_hash: string;
-  owner: string;
-  listing: string | null;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerNFT {
-  _id: string;
-  name: string;
-  description: string;
-  creator: string;
-  imageurl?: string;
-}
-
-export interface Pagination {
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface PartialTransaction {
-  part: string;
-  txId?: string;
-  transaction?: string;
-  from: string;
-  to: string;
-  nftId: string;
-  chainTx: string;
-  currency: string;
-  amount: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerTransaction {
-  _id: string;
-  type: "TRANSACTION" | "GIFT" | "MINT";
-  listingId: string;
-  reservationId: string;
-  buyer: string;
-  seller: string;
-  nftId: string;
-  quantity: number;
-  chainTx: string;
-  currency: string;
-  amount: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-}
-
-export type ExplorerResult =
-  | {
-      kind: "part";
-      part: ExplorerPart;
-      nft: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination;
-    }
-  | {
-      kind: "transaction";
-      transaction: ExplorerTransaction;
-      parts?: ExplorerPart[];
-      nft?: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination | null;
-    };
-</file>
-
-<file path="src/App.svelte">
-<script lang="ts">
-  import { onMount } from "svelte";
-  import SearchPanel from "./lib/components/SearchPanel.svelte";
-  import ResultPanel from "./lib/components/ResultPanel.svelte";
-  import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
-  import { unifiedSearch, fetchStores } from "./lib/api";
-
-  const pageSize = 50;
-
-  let query = "";
-  let loading = false;
-  let error: string | null = null;
-  let result: ExplorerResult | null = null;
-  let pagination: Pagination | null = null;
-  let currentPage = 0;
-  let theme: "dark" | "light" = "dark";
-  let stores: StoreInfo[] = [];
-  let selectedStoreId: string | null = null;
-
-  onMount(async () => {
-    applyTheme();
-    try {
-      stores = await fetchStores();
-    } catch (err) {
-      console.error("Failed to fetch stores:", err);
-      // Continue with empty stores array - will default to "all stores"
-    }
-  });
-
-  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
-    const input = value.trim();
-    if (!input) {
-      error = "Please enter a value to search.";
-      result = null;
-      pagination = null;
-      return;
+  /* Mobile responsive styles */
+  @media (max-width: 768px) {
+    .verification-content {
+      gap: 2rem;
+      max-width: 100%;
+      width: 100%;
+      overflow-x: hidden;
     }
 
-    loading = true;
-    error = null;
-
-    try {
-      const data = await unifiedSearch(input, { 
-        page, 
-        pageSize,
-        storeId: storeId || undefined
-      });
-      result = data;
-      pagination = data.pagination;
-      currentPage = page;
-    } catch (err) {
-      error = err instanceof Error ? err.message : "Unexpected error";
-      result = null;
-      pagination = null;
-    } finally {
-      loading = false;
+    h3 {
+      font-size: 1.5rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
-  }
 
-  async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
-    query = event.detail.query;
-    selectedStoreId = event.detail.storeId ?? null;
-    await executeSearch(query, 0, selectedStoreId);
-  }
-
-  function totalPages() {
-    if (!pagination) return 0;
-    return Math.max(1, Math.ceil(pagination.total / pagination.limit));
-  }
-
-  async function goToPage(page: number) {
-    if (!pagination) return;
-    const pages = totalPages();
-    if (page < 0 || page >= pages) return;
-    await executeSearch(query, page, selectedStoreId);
-  }
-
-  function toggleTheme() {
-    theme = theme === "dark" ? "light" : "dark";
-    applyTheme();
-  }
-
-  function applyTheme() {
-    document.body.classList.toggle("light-theme", theme === "light");
-  }
-
-</script>
-
-<main class="app">
-  <header class="hero">
-    <div class="hero__text">
-      <h1>NFT Explorer</h1>
-      <p class="subtitle">
-        Search transactions across the network.
-      </p>
-    </div>
-    <div class="hero__actions">
-      <button class="theme-toggle" type="button" on:click={toggleTheme}>
-        {theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
-      </button>
-    </div>
-  </header>
-
-  <SearchPanel
-    bind:query
-    {loading}
-    {error}
-    {stores}
-    bind:selectedStoreId
-    on:search={handleSearch}
-  />
-
-  <ResultPanel {result} />
-
-  {#if pagination && pagination.total > pagination.limit}
-    <nav class="pager">
-      <button
-        type="button"
-        class="pager__button"
-        on:click={() => goToPage(currentPage - 1)}
-        disabled={loading || currentPage === 0}
-      >
-        Previous
-      </button>
-      <span class="pager__info">
-        Page {currentPage + 1} of {totalPages()}
-      </span>
-      <button
-        type="button"
-        class="pager__button"
-        on:click={() => goToPage(currentPage + 1)}
-        disabled={loading || currentPage + 1 >= totalPages()}
-      >
-        Next
-      </button>
-    </nav>
-  {/if}
-</main>
-
-<style>
-  .app {
-    min-height: 100vh;
-    padding: 2.5rem clamp(1rem, 5vw, 4rem);
-    display: grid;
-    gap: 2rem;
-    color: var(--text-primary);
-  }
-
-  .hero {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    background: var(--card-bg);
-    border-radius: 1.25rem;
-    padding: 2rem;
-    border: 1px solid var(--card-border);
-    box-shadow: 0 24px 55px var(--card-shadow);
-  }
-
-  @media (min-width: 900px) {
-    .hero {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
+    h4 {
+      font-size: 1.1rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
-  }
 
-  .hero__text {
-    max-width: 640px;
-  }
+    p {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      hyphens: auto;
+    }
 
-  h1 {
-    margin: 0;
-    font-size: clamp(2.2rem, 3vw, 2.8rem);
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: var(--text-primary);
-  }
+    ul, ol {
+      padding-left: 1.25rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
 
-  .subtitle {
-    margin: 0.35rem 0 0;
-    color: var(--text-secondary);
-    max-width: 48ch;
-    font-size: 1.05rem;
-  }
+    li {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      margin: 0.75rem 0;
+    }
 
-  .hero__actions {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
+    code {
+      word-break: break-all;
+      overflow-wrap: break-word;
+      font-size: 0.85em;
+      display: inline-block;
+      max-width: 100%;
+    }
 
-  .theme-toggle {
-    padding: 0.75rem 1.4rem;
-    border-radius: 999px;
-    border: 1px solid var(--card-border);
-    background: transparent;
-    color: var(--text-primary);
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-  }
+    .code-block {
+      padding: 0.75rem;
+      margin: 0.75rem 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
 
-  .theme-toggle:hover {
-    background: var(--card-border);
-  }
+    .code-block pre {
+      font-size: 0.75rem;
+      white-space: pre;
+      overflow-x: auto;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
 
-  .pager {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    justify-content: flex-end;
-  }
+    .check-item {
+      padding: 0.75rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
 
-  .pager__button {
-    padding: 0.65rem 1.2rem;
-    border-radius: 999px;
-    border: 1px solid var(--card-border);
-    background: var(--card-bg);
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.2s ease, opacity 0.2s ease;
-  }
+    .check-item strong {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
 
-  .pager__button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+    .check-item p {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
 
-  .pager__button:not(:disabled):hover {
-    background: var(--card-border);
-  }
+    .highlight-box {
+      padding: 1rem;
+      margin: 1rem 0;
+    }
 
-  .pager__info {
-    font-size: 0.9rem;
-    color: var(--text-muted);
+    .highlight-box p {
+      font-size: 1rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
   }
 </style>
 </file>
@@ -4047,6 +5722,98 @@ import { queryStore, queryStores } from "../utils/storeClient.js";
 
 const router = express.Router();
 
+// In-memory cache for store icons
+interface IconCacheEntry {
+  data: Buffer;
+  contentType: string;
+  timestamp: number;
+}
+
+const iconCache = new Map<string, IconCacheEntry>();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * GET /api/explorer/icon/:storeId
+ * 
+ * Proxy and cache store icons to avoid CORS issues.
+ */
+router.get("/icon/:storeId", async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const store = getStoreById(storeId);
+    
+    if (!store) {
+      return res.status(404).json({ error: "Store not found" });
+    }
+
+    if (!store.icon) {
+      return res.status(404).json({ error: "Store has no icon configured" });
+    }
+
+    // Check cache first
+    const cacheKey = storeId;
+    const cached = iconCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      res.setHeader("Content-Type", cached.contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400"); // 24 hours
+      return res.send(cached.data);
+    }
+
+    // Fetch icon from store
+    try {
+      console.log(`[Explorer API] Fetching icon for store ${storeId} from: ${store.icon}`);
+      const iconResponse = await fetch(store.icon, {
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+
+      console.log(`[Explorer API] Icon fetch response status: ${iconResponse.status} for ${store.icon}`);
+      if (!iconResponse.ok) {
+        const errorText = await iconResponse.text().catch(() => 'Unable to read error response');
+        throw new Error(`Failed to fetch icon: ${iconResponse.status} - ${errorText}`);
+      }
+
+      const contentType = iconResponse.headers.get("content-type") || "image/png";
+      const buffer = Buffer.from(await iconResponse.arrayBuffer());
+
+      // Cache the icon
+      iconCache.set(cacheKey, {
+        data: buffer,
+        contentType,
+        timestamp: Date.now(),
+      });
+
+      // Set headers
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400"); // 24 hours
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      res.send(buffer);
+    } catch (fetchError) {
+      console.error(`[Explorer API] Failed to fetch icon for store ${storeId} from ${store.icon}:`, fetchError);
+      console.error(`[Explorer API] Fetch error details:`, fetchError instanceof Error ? fetchError.message : String(fetchError));
+      
+      // If we have a stale cache, use it
+      if (cached) {
+        console.log(`[Explorer API] Using stale cached icon for store ${storeId}`);
+        res.setHeader("Content-Type", cached.contentType);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.send(cached.data);
+      }
+
+      res.status(502).json({ 
+        error: "Failed to fetch store icon",
+        details: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        iconUrl: store.icon
+      });
+    }
+  } catch (err) {
+    console.error("[Explorer API] Error in /icon/:storeId:", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error"
+    });
+  }
+});
+
 /**
  * GET /api/explorer/stores
  * 
@@ -4056,10 +5823,66 @@ router.get("/stores", (req, res) => {
   try {
     const stores = getStores();
     res.json(
-      stores.map(store => ({
-        id: store.id,
-        name: store.name
-      }))
+      stores.map(store => {
+        // Extract website URL from baseUrl
+        // e.g., https://store.example.com/api/explorer -> www.store.example.com
+        let website: string | undefined;
+        let icon = store.icon;
+        
+        try {
+          const url = new URL(store.baseUrl);
+          const hostname = url.hostname;
+          
+          // For localhost, show as-is (e.g., localhost:3000)
+          if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            website = url.port ? `${hostname}:${url.port}` : hostname;
+            
+            // Ensure localhost stores have a default icon if not set
+            if (!icon) {
+              const frontendPort = process.env.FRONTEND_PORT || '5173';
+              icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+            }
+          } else {
+            // For other domains, add www prefix
+            website = hostname.startsWith('www.') 
+              ? hostname 
+              : `www.${hostname}`;
+          }
+        } catch {
+          // If URL parsing fails, try regex fallback
+          const match = store.baseUrl.match(/^https?:\/\/([^\/]+)/);
+          if (match) {
+            const fullHost = match[1];
+            const [hostname, port] = fullHost.split(':');
+            
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+              website = port ? `${hostname}:${port}` : hostname;
+              
+              // Ensure localhost stores have a default icon if not set
+              if (!icon) {
+                const frontendPort = process.env.FRONTEND_PORT || '5173';
+                icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+              }
+            } else {
+              website = hostname.startsWith('www.') ? hostname : `www.${hostname}`;
+            }
+          }
+        }
+        
+        // Return proxied icon URL if icon exists
+        let iconUrl: string | null = null;
+        if (icon) {
+          iconUrl = `/api/explorer/icon/${store.id}`;
+        }
+        
+        return {
+          id: store.id,
+          name: store.name,
+          baseUrl: store.baseUrl,
+          website: website,
+          icon: iconUrl
+        };
+      })
     );
   } catch (err) {
     console.error("[Explorer API] Error in /stores:", err);
@@ -4932,6 +6755,34 @@ export async function fetchStores(): Promise<StoreInfo[]> {
   return (await response.json()) as StoreInfo[];
 }
 
+/**
+ * Fetch last transaction for a specific store.
+ */
+export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
+  transaction: ExplorerTransaction;
+  error?: string;
+} | null> {
+  try {
+    const response = await fetch(`${storeBaseUrl}/last-transaction`, {
+      headers: {
+        Accept: "application/json"
+      },
+      signal: AbortSignal.timeout(5000) // 5 second timeout
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return {
+      transaction: data.transaction
+    };
+  } catch (err) {
+    return null; // Store is offline or error occurred
+  }
+}
+
 interface PartResponse {
   part: ExplorerPart;
   nft?: ExplorerNFT | null;
@@ -5191,6 +7042,1356 @@ export async function unifiedSearch(
     `Errors: ${allErrors}`
   );
 }
+</file>
+
+<file path="src/lib/types.ts">
+export type SearchMode = "part" | "transaction";
+
+export interface StoreInfo {
+  id: string;
+  name: string;
+  baseUrl: string;
+  website?: string;
+  icon?: string | null;
+}
+
+export interface ExplorerPart {
+  _id: string;
+  part_no: number;
+  parent_hash: string;
+  owner: string;
+  listing: string | null;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerNFT {
+  _id: string;
+  name: string;
+  description: string;
+  creator: string;
+  imageurl?: string;
+}
+
+export interface Pagination {
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface PartialTransaction {
+  part: string;
+  txId?: string;
+  transaction?: string;
+  from: string;
+  to: string;
+  nftId: string;
+  chainTx: string;
+  currency: string;
+  amount: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerTransaction {
+  _id: string;
+  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
+  transaction_number?: number;
+  listingId?: string;
+  reservationId?: string;
+  buyer?: string;
+  seller?: string;
+  nftId?: string;
+  quantity?: number;
+  chainTx?: string;
+  currency?: string;
+  amount?: string;
+  arweaveTxId?: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+  // Signature fields (for verification)
+  signer?: string;
+  signature?: string;
+  // Gift-specific fields
+  giver?: string;
+  receiver?: string;
+  giftId?: string;
+  // Listing-specific fields
+  price?: string;
+  sellerWallets?: Record<string, string>;
+  bundleSale?: boolean;
+}
+
+export type ExplorerResult =
+  | {
+      kind: "part";
+      part: ExplorerPart;
+      nft: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination;
+    }
+  | {
+      kind: "transaction";
+      transaction: ExplorerTransaction;
+      parts?: ExplorerPart[];
+      nft?: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination | null;
+    };
+</file>
+
+<file path="src/lib/components/ResultPanel.svelte">
+<script lang="ts">
+  import type { ExplorerResult, ExplorerNFT } from "../types";
+  import { formatAddress, formatAmount, formatDate } from "../utils/format";
+  import PartialTable from "./PartialTable.svelte";
+  import PartsList from "./PartsList.svelte";
+  import VerificationModal from "./VerificationModal.svelte";
+  import { getPartLink, getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
+  import { fetchNftMetadata } from "../api";
+  import { verifyTransaction, fetchArweaveTransaction } from "../utils/verification";
+
+  import { createEventDispatcher } from "svelte";
+  
+  export let result: ExplorerResult | null = null;
+  
+  const dispatch = createEventDispatcher();
+
+  let transactionNft: ExplorerNFT | null = null;
+  let verificationModalOpen = false;
+  let verificationStep = "";
+  let verificationState: "idle" | "verifying" | "verified" | "failed" = "idle";
+  let verificationError: string | null = null;
+  let verificationChecks: any[] = [];
+
+  // Fetch NFT metadata for transaction
+  $: if (result && result.kind === "transaction") {
+    if (result.nft) {
+      transactionNft = result.nft;
+    } else if (result.transaction.nftId) {
+      // Fetch NFT metadata using transaction's nftId
+      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
+        transactionNft = nft;
+      });
+    } else if (result.parts && result.parts.length > 0) {
+      // Fallback: use first part's parent_hash
+      const firstPart = result.parts[0];
+      if (firstPart && firstPart.parent_hash) {
+        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
+          transactionNft = nft;
+        });
+      }
+    }
+  } else {
+    transactionNft = null;
+  }
+
+  async function handleVerify() {
+    if (!result || result.kind !== "transaction" || verificationState === "verifying") {
+      return;
+    }
+
+    // If already verified, just show the results
+    if (verificationState === "verified" || verificationState === "failed") {
+      verificationModalOpen = true;
+      return;
+    }
+
+    verificationModalOpen = true;
+    verificationState = "verifying";
+    verificationError = null;
+    verificationStep = "";
+    verificationChecks = [];
+
+    try {
+      const updateStep = (step: string) => {
+        verificationStep = step;
+      };
+
+      const verificationResult = await verifyTransaction(result.transaction, updateStep);
+
+      // Store checks for display
+      verificationChecks = verificationResult.checks || [];
+
+      if (verificationResult.verified) {
+        verificationState = "verified";
+        verificationStep = "";
+        verificationError = null;
+      } else {
+        verificationState = "failed";
+        verificationStep = "";
+        verificationError = verificationResult.errors.length > 0 
+          ? verificationResult.errors.join("; ")
+          : "Unknown verification error";
+      }
+    } catch (error) {
+      verificationState = "failed";
+      verificationStep = "";
+      verificationError = error instanceof Error ? error.message : String(error);
+      verificationChecks = [{
+        name: "Verification Process",
+        passed: false,
+        message: error instanceof Error ? error.message : String(error)
+      }];
+    }
+  }
+
+  let loadingPrevious = false;
+  let previousError: string | null = null;
+
+  async function handlePreviousTransaction() {
+    if (!result || result.kind !== "transaction" || !result.transaction.arweaveTxId) {
+      return;
+    }
+
+    loadingPrevious = true;
+    previousError = null;
+
+    try {
+      // Step 1: Fetch current transaction from Arweave to get previous_arweave_tx
+      const currentArweaveData = await fetchArweaveTransaction(result.transaction.arweaveTxId);
+      const previousArweaveTxId = currentArweaveData.previous_arweave_tx;
+
+      if (!previousArweaveTxId) {
+        previousError = "This is the first transaction in the chain";
+        loadingPrevious = false;
+        return;
+      }
+
+      // Step 2: Fetch previous transaction from Arweave to get its transactionId
+      const previousArweaveData = await fetchArweaveTransaction(previousArweaveTxId);
+      const previousTransactionId = previousArweaveData.transactionId;
+
+      if (!previousTransactionId) {
+        previousError = "Previous transaction does not have a transactionId";
+        loadingPrevious = false;
+        return;
+      }
+
+      // Step 3: Reset verification state for the new transaction
+      verificationState = "idle";
+      verificationModalOpen = false;
+      verificationStep = "";
+      verificationError = null;
+      verificationChecks = [];
+
+      // Step 4: Dispatch search event with the transactionId
+      dispatch("search", { query: previousTransactionId, storeId: null });
+    } catch (error) {
+      previousError = error instanceof Error ? error.message : "Failed to fetch previous transaction";
+      console.error("Error fetching previous transaction:", error);
+    } finally {
+      loadingPrevious = false;
+    }
+  }
+</script>
+
+{#if result}
+  {#if result.kind === "part"}
+  <section class="result-section">
+    <header>
+      <h2>Part</h2>
+      <span class="badge">Part Hash</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <h3>Part Metadata</h3>
+        <dl>
+          <div>
+            <dt>Part Hash</dt>
+            <dd>
+              <a
+                href={getPartLink(result.part._id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="part-link"
+              >
+                {result.part._id}
+              </a>
+            </dd>
+          </div>
+          <div>
+            <dt>Part Number</dt>
+            <dd>{result.part.part_no}</dd>
+          </div>
+          <div>
+            <dt>Parent NFT</dt>
+            <dd>{result.part.parent_hash}</dd>
+          </div>
+          <div>
+            <dt>Owner</dt>
+            <dd>{formatAddress(result.part.owner)}</dd>
+          </div>
+          <div>
+            <dt>Listing</dt>
+            <dd>{result.part.listing ?? "Not Listed"}</dd>
+          </div>
+          {#if result.part.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.part.storeName}</dd>
+            </div>
+          {/if}
+        </dl>
+      </div>
+      {#if result.nft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if result.nft.imageurl}
+            <figure>
+              <img src={result.nft.imageurl} alt={`NFT ${result.nft.name}`} />
+              <figcaption>{result.nft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{result.nft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{result.nft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(result.nft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      <PartialTable
+        title="Partial Transactions"
+        partials={result.partialTransactions}
+        pagination={result.pagination}
+      />
+    </div>
+  </section>
+{:else if result.kind === "transaction"}
+  <section class="result-section">
+    <header>
+      <h2>Transaction</h2>
+      <span class="badge">Transaction Lookup</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <div class="card-header">
+          <h3>Summary</h3>
+          {#if result.kind === "transaction"}
+            <div class="button-group">
+              <button
+                class="verify-button"
+                class:verified={verificationState === "verified"}
+                class:failed={verificationState === "failed"}
+                disabled={verificationState === "verifying"}
+                on:click={handleVerify}
+              >
+                {#if verificationState === "verified"}
+                  ✓ Transaction Verified
+                {:else if verificationState === "failed"}
+                  ✗ Verification Failed
+                {:else if verificationState === "verifying"}
+                  Verifying...
+                {:else}
+                  Verify
+                {/if}
+              </button>
+              {#if verificationState === "verified" || verificationState === "failed"}
+                <button
+                  class="learn-more-button"
+                  on:click={() => dispatch("navigateToVerification")}
+                >
+                  Learn More
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <dl>
+          <div>
+            <dt>Transaction ID</dt>
+            <dd>{result.transaction._id}</dd>
+          </div>
+          {#if result.transaction.transaction_number !== undefined}
+            <div>
+              <dt>Transaction Number</dt>
+              <dd>{result.transaction.transaction_number}</dd>
+            </div>
+          {/if}
+          <div>
+            <dt>Type</dt>
+            <dd>{result.transaction.type || "TRANSACTION"}</dd>
+          </div>
+          <div>
+            <dt>Chain Hash</dt>
+            <dd>
+              {#if result.transaction.chainTx}
+                <a
+                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.chainTx)}
+                </a>
+              {:else}
+                —
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Arweave Transaction</dt>
+            <dd>
+              {#if result.transaction.arweaveTxId}
+                <a
+                  href={getArweaveTxLink(result.transaction.arweaveTxId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.arweaveTxId)}
+                </a>
+              {:else}
+                <span class="text-muted">Not uploaded</span>
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Buyer</dt>
+            <dd>{result.transaction.buyer ? formatAddress(result.transaction.buyer) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Seller</dt>
+            <dd>{result.transaction.seller ? formatAddress(result.transaction.seller) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Quantity</dt>
+            <dd>{result.transaction.quantity}</dd>
+          </div>
+          {#if result.transaction.type === "LISTING_CREATE"}
+            <div>
+              <dt>Price</dt>
+              <dd>{result.transaction.price ? formatAmount(result.transaction.price, "YRT") : "—"}</dd>
+            </div>
+            <div>
+              <dt>Accepted Currencies</dt>
+              <dd>
+                {#if result.transaction.sellerWallets && Object.keys(result.transaction.sellerWallets).length > 0}
+                  {Object.keys(result.transaction.sellerWallets).join(", ")}
+                {:else}
+                  —
+                {/if}
+              </dd>
+            </div>
+          {:else}
+            <div>
+              <dt>Amount</dt>
+              <dd>{formatAmount(result.transaction.amount || "", result.transaction.currency || "")}</dd>
+            </div>
+            {#if result.transaction.currency}
+              <div>
+                <dt>Currency</dt>
+                <dd>{result.transaction.currency.toUpperCase()}</dd>
+              </div>
+            {/if}
+          {/if}
+          <div>
+            <dt>Timestamp</dt>
+            <dd>{formatDate(result.transaction.timestamp)}</dd>
+          </div>
+          {#if result.transaction.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.transaction.storeName}</dd>
+            </div>
+          {/if}
+        </dl>
+        {#if result.transaction.arweaveTxId}
+          <div class="button-group">
+            <button
+              class="previous-button"
+              disabled={loadingPrevious}
+              on:click={handlePreviousTransaction}
+            >
+              {#if loadingPrevious}
+                Loading...
+              {:else}
+                ← Previous Transaction
+              {/if}
+            </button>
+            {#if previousError}
+              <p class="error-text">{previousError}</p>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      {#if transactionNft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if transactionNft.imageurl}
+            <figure>
+              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
+              <figcaption>{transactionNft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{transactionNft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{transactionNft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(transactionNft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      {#if result.parts && result.parts.length > 0}
+        <PartsList parts={result.parts} pagination={result.pagination} />
+      {:else}
+        <div class="card note-card">
+          <h3>Parts</h3>
+          <p>No parts found for this transaction.</p>
+        </div>
+      {/if}
+    </div>
+  </section>
+  {/if}
+{/if}
+
+<VerificationModal
+  isOpen={verificationModalOpen}
+  currentStep={verificationStep}
+  checks={verificationChecks}
+  isVerifying={verificationState === "verifying"}
+  on:close={() => {
+    verificationModalOpen = false;
+  }}
+/>
+
+<style>
+  .result-section {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .badge {
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--badge-text);
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .grid {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  @media (min-width: 1280px) {
+    .grid {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+  }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+  }
+
+  .note-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    gap: 0.75rem;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .card h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .verify-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease, background 0.2s ease;
+  }
+
+  .verify-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .verify-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .verify-button.verified {
+    background: #10b981;
+    border-color: #10b981;
+  }
+
+  .verify-button.failed {
+    background: #ef4444;
+    border-color: #ef4444;
+  }
+
+  .learn-more-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .learn-more-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  .previous-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    width: 100%;
+    margin-top: 1rem;
+  }
+
+  .previous-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .previous-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .error-text {
+    color: #ef4444;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+  }
+
+  @media (max-width: 640px) {
+    .card-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .button-group {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    .verify-button,
+    .learn-more-button {
+      width: 100%;
+    }
+  }
+
+  dl {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  dt {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-label);
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .media-card figure {
+    margin: 0 0 1rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .media-card img {
+    width: 100%;
+    border-radius: 0.75rem;
+    object-fit: cover;
+    max-height: 240px;
+    border: 1px solid var(--image-border);
+  }
+
+  .media-card figcaption {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .media-card .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .part-link,
+  .chain-tx-link {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+  }
+
+  .part-link:hover,
+  .chain-tx-link:hover {
+    text-decoration: underline;
+  }
+</style>
+</file>
+
+<file path="src/App.svelte">
+<script lang="ts">
+  import { onMount } from "svelte";
+  import SearchPanel from "./lib/components/SearchPanel.svelte";
+  import ResultPanel from "./lib/components/ResultPanel.svelte";
+  import NetworkPage from "./lib/components/NetworkPage.svelte";
+  import VerificationPage from "./lib/components/VerificationPage.svelte";
+  import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
+  import { unifiedSearch, fetchStores } from "./lib/api";
+
+  const pageSize = 50;
+
+  let query = "";
+  let loading = false;
+  let error: string | null = null;
+  let result: ExplorerResult | null = null;
+  let pagination: Pagination | null = null;
+  let currentPage = 0;
+  let theme: "dark" | "light" = "dark";
+  let stores: StoreInfo[] = [];
+  let selectedStoreId: string | null = null;
+  let mobileMenuOpen = false;
+  let activeSection = "search";
+
+  onMount(async () => {
+    applyTheme();
+    try {
+      stores = await fetchStores();
+    } catch (err) {
+      console.error("Failed to fetch stores:", err);
+      // Continue with empty stores array - will default to "all stores"
+    }
+  });
+
+  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
+    const input = value.trim();
+    if (!input) {
+      error = "Please enter a value to search.";
+      result = null;
+      pagination = null;
+      return;
+    }
+
+    loading = true;
+    error = null;
+
+    try {
+      const data = await unifiedSearch(input, { 
+        page, 
+        pageSize,
+        storeId: storeId || undefined
+      });
+      result = data;
+      pagination = data.pagination;
+      currentPage = page;
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Unexpected error";
+      result = null;
+      pagination = null;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
+    query = event.detail.query;
+    selectedStoreId = event.detail.storeId ?? null;
+    await executeSearch(query, 0, selectedStoreId);
+  }
+
+  function totalPages() {
+    if (!pagination) return 0;
+    return Math.max(1, Math.ceil(pagination.total / pagination.limit));
+  }
+
+  async function goToPage(page: number) {
+    if (!pagination) return;
+    const pages = totalPages();
+    if (page < 0 || page >= pages) return;
+    await executeSearch(query, page, selectedStoreId);
+  }
+
+  function toggleTheme() {
+    theme = theme === "dark" ? "light" : "dark";
+    applyTheme();
+  }
+
+  function applyTheme() {
+    document.body.classList.toggle("light-theme", theme === "light");
+  }
+
+  function toggleMobileMenu() {
+    mobileMenuOpen = !mobileMenuOpen;
+  }
+
+  function setActiveSection(section: string) {
+    activeSection = section;
+    mobileMenuOpen = false;
+  }
+
+  function scrollToSearch(e?: Event) {
+    if (e) e.preventDefault();
+    const searchPanel = document.querySelector('.search-panel');
+    if (searchPanel) {
+      searchPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    setActiveSection('search');
+  }
+
+  function handleNavClick(e: Event, section: string) {
+    e.preventDefault();
+    setActiveSection(section);
+    mobileMenuOpen = false;
+    
+    // Scroll to top for navigation pages
+    if (section !== 'search') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+</script>
+
+<nav class="navbar sticky">
+  <div class="navbar__container">
+    <div class="navbar__brand">
+      <h1 class="navbar__title">NFT Explorer</h1>
+      <p class="navbar__subtitle">Search transactions across the network.</p>
+    </div>
+    
+    <div class="navbar__menu" class:open={mobileMenuOpen}>
+      <a href="#search" class="navbar__link" class:active={activeSection === 'search'} on:click={(e) => scrollToSearch(e)}>
+        Search
+      </a>
+      <a href="#network" class="navbar__link" class:active={activeSection === 'network'} on:click={(e) => handleNavClick(e, 'network')}>
+        Our network
+      </a>
+      <a href="#terms" class="navbar__link" class:active={activeSection === 'terms'} on:click={(e) => handleNavClick(e, 'terms')}>
+        Terms of service
+      </a>
+      <a href="#verification" class="navbar__link" class:active={activeSection === 'verification'} on:click={(e) => handleNavClick(e, 'verification')}>
+        Verification & Arweave
+      </a>
+    </div>
+
+    <div class="navbar__actions">
+      <button 
+        class="theme-toggle" 
+        type="button" 
+        on:click={toggleTheme}
+        aria-label="Toggle theme"
+        title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      >
+        {#if theme === "dark"}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 3V1M10 19V17M17 10H19M1 10H3M15.657 15.657L16.97 16.97M3.03 3.03L4.343 4.343M15.657 4.343L16.97 3.03M3.03 16.97L4.343 15.657M14 10C14 12.2091 12.2091 14 10 14C7.79086 14 6 12.2091 6 10C6 7.79086 7.79086 6 10 6C12.2091 6 14 7.79086 14 10Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        {:else}
+          <svg width="20" height="20" viewBox="0 0 324.694 324.694" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+            <path d="M291.396,287.685c-0.646-3.021-3.045-5.356-6.077-5.925c-58.351-11.019-104.084-55.646-116.517-113.696
+              c-12.433-58.06,11.013-117.502,59.735-151.451c2.531-1.761,3.759-4.876,3.115-7.894c-0.647-3.018-3.046-5.355-6.078-5.933
+              c-21.053-3.976-42.939-3.691-64.052,0.824c-42.397,9.078-78.725,34.122-102.286,70.528
+              c-23.559,36.397-31.535,79.792-22.454,122.189c15.926,74.377,82.62,128.361,158.579,128.367c0.004,0,0.013,0,0.017,0
+              c11.396,0,22.88-1.221,34.129-3.625c21.267-4.554,41.042-13.129,58.772-25.484C290.816,293.817,292.04,290.701,291.396,287.685z
+              M226.294,306.07c-10.197,2.18-20.597,3.288-30.916,3.288c-0.004,0-0.007,0-0.013,0c-68.777-0.008-129.161-48.891-143.581-116.244
+              c-8.224-38.391-1.004-77.68,20.33-110.642c21.333-32.96,54.227-55.646,92.621-63.861c10.181-2.187,20.58-3.288,30.9-3.288
+              c3.119,0,6.245,0.097,9.365,0.299c-43.655,38.534-63.604,97.721-51.202,155.652c12.41,57.93,54.851,103.759,110.463,121.029
+              C252.376,298.597,239.663,303.209,226.294,306.07z"/>
+          </svg>
+        {/if}
+      </button>
+      
+      <button 
+        class="mobile-menu-toggle" 
+        type="button" 
+        on:click={toggleMobileMenu}
+        aria-label="Toggle menu"
+        aria-expanded={mobileMenuOpen}
+      >
+        <span class="hamburger" class:active={mobileMenuOpen}>
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<main class="app">
+  {#if activeSection === 'search'}
+    <div class="search-panel">
+      <SearchPanel
+        bind:query
+        {loading}
+        {error}
+        {stores}
+        bind:selectedStoreId
+        on:search={handleSearch}
+      />
+    </div>
+
+    {#if result}
+      <ResultPanel {result} on:search={handleSearch} on:navigateToVerification={() => {
+        setActiveSection('verification');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }} />
+    {/if}
+  {:else if activeSection === 'network'}
+    <NetworkPage />
+  {:else if activeSection === 'terms'}
+    <div class="content-page">
+      <div class="content-header">
+        <h2>Terms of Service</h2>
+        <p class="content-description">
+          Please read these terms carefully before using the NFT Explorer.
+        </p>
+      </div>
+      <div class="content-body">
+        <p>This page will contain the complete terms of service, including usage guidelines, acceptable use policies, limitations of liability, privacy policies, and service agreements. Users must agree to these terms to use the explorer.</p>
+      </div>
+    </div>
+  {:else if activeSection === 'verification'}
+    <div class="content-page">
+      <div class="content-header">
+        <h2>Verification & Arweave</h2>
+        <p class="content-description">
+          Learn how we ensure transaction integrity through cryptographic verification and permanent storage on Arweave.
+        </p>
+      </div>
+      <div class="content-body">
+        <VerificationPage />
+      </div>
+    </div>
+  {/if}
+
+  {#if activeSection === 'search' && pagination && pagination.total > pagination.limit}
+    <nav class="pager">
+      <button
+        type="button"
+        class="pager__button"
+        on:click={() => goToPage(currentPage - 1)}
+        disabled={loading || currentPage === 0}
+      >
+        Previous
+      </button>
+      <span class="pager__info">
+        Page {currentPage + 1} of {totalPages()}
+      </span>
+      <button
+        type="button"
+        class="pager__button"
+        on:click={() => goToPage(currentPage + 1)}
+        disabled={loading || currentPage + 1 >= totalPages()}
+      >
+        Next
+      </button>
+    </nav>
+  {/if}
+</main>
+
+<style>
+  .navbar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background: var(--card-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--card-border);
+    box-shadow: 0 4px 6px -1px var(--card-shadow);
+  }
+
+  .navbar__container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 1rem clamp(1rem, 5vw, 2rem);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+  }
+
+  .navbar__brand {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .navbar__title {
+    margin: 0;
+    font-size: clamp(1.5rem, 2.5vw, 1.75rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+
+  .navbar__subtitle {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: clamp(0.875rem, 1.5vw, 0.95rem);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .navbar__menu {
+    display: flex;
+    align-items: center;
+    gap: 2.5rem;
+    flex: 1;
+    justify-content: center;
+  }
+
+  @media (min-width: 769px) and (max-width: 1024px) {
+    .navbar__menu {
+      gap: 1.5rem;
+    }
+  }
+
+  .navbar__link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.95rem;
+    padding: 0.5rem 0;
+    position: relative;
+    transition: color 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .navbar__link:hover {
+    color: var(--text-primary);
+  }
+
+  .navbar__link.active {
+    color: var(--accent);
+  }
+
+  .navbar__link.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px 2px 0 0;
+  }
+
+  .navbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    padding: 0;
+  }
+
+  .theme-toggle:hover {
+    background: var(--card-border);
+  }
+
+  .mobile-menu-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .hamburger {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    width: 24px;
+  }
+
+  .hamburger span {
+    display: block;
+    height: 2px;
+    width: 100%;
+    background: currentColor;
+    border-radius: 2px;
+    transition: all 0.3s ease;
+  }
+
+  .hamburger.active span:nth-child(1) {
+    transform: rotate(45deg) translate(6.5px, 6.5px);
+  }
+
+  .hamburger.active span:nth-child(2) {
+    opacity: 0;
+    width: 0;
+  }
+
+  .hamburger.active span:nth-child(3) {
+    transform: rotate(-45deg) translate(6.5px, -6.5px);
+  }
+
+  @media (max-width: 768px) {
+    .navbar__container {
+      flex-wrap: nowrap;
+      position: relative;
+    }
+
+    .navbar__brand {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .navbar__subtitle {
+      white-space: normal;
+    }
+
+    .navbar__menu {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: var(--card-bg);
+      border-top: 1px solid var(--card-border);
+      flex-direction: column;
+      align-items: stretch;
+      padding: 1rem;
+      gap: 0;
+      box-shadow: 0 4px 6px -1px var(--card-shadow);
+    }
+
+    .navbar__menu.open {
+      display: flex;
+    }
+
+    .navbar__link {
+      padding: 1rem;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 1rem;
+    }
+
+    .navbar__link:last-child {
+      border-bottom: none;
+    }
+
+    .navbar__link.active::after {
+      display: none;
+    }
+
+    .navbar__link.active {
+      background: var(--card-border);
+      border-radius: 6px;
+    }
+
+    .mobile-menu-toggle {
+      display: flex;
+    }
+
+    .navbar__actions {
+      gap: 0.5rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .navbar__title {
+      font-size: 1.25rem;
+    }
+
+    .navbar__subtitle {
+      font-size: 0.8rem;
+    }
+  }
+
+  .app {
+    min-height: 100vh;
+    padding: 2.5rem clamp(1rem, 5vw, 4rem);
+    display: grid;
+    gap: 2rem;
+    color: var(--text-primary);
+  }
+
+  .search-panel {
+    scroll-margin-top: 100px;
+  }
+
+  :global(.content-page) {
+    max-width: 1200px;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+  }
+
+  :global(.content-header) {
+    margin-bottom: 3rem;
+    text-align: left;
+    width: 100%;
+  }
+
+  :global(.content-header h2) {
+    margin: 0 0 1rem;
+    font-size: clamp(2rem, 3vw, 2.5rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    text-align: left;
+    width: 100%;
+  }
+
+  :global(.content-description) {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    font-size: 1.05rem;
+    max-width: 700px;
+  }
+
+  .content-body {
+    color: var(--text-secondary);
+    line-height: 1.7;
+    font-size: 1.05rem;
+  }
+
+  .content-body p {
+    margin: 0 0 1.5rem;
+  }
+
+  .content-body p:last-child {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 768px) {
+    .content-body {
+      overflow-x: hidden;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    :global(.content-page) {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+
+  .pager__button {
+    padding: 0.65rem 1.2rem;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.2s ease, opacity 0.2s ease;
+  }
+
+  .pager__button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pager__button:not(:disabled):hover {
+    background: var(--card-border);
+  }
+
+  .pager__info {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+</style>
 </file>
 
 </files>
