@@ -33,7 +33,7 @@ export async function fetchStores(): Promise<StoreInfo[]> {
  * Fetch last transaction for a specific store.
  */
 export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
-  transaction: ExplorerTransaction;
+  transaction: ExplorerTransaction | null;
   error?: string;
 } | null> {
   try {
@@ -41,11 +41,19 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
       headers: {
         Accept: "application/json"
       },
-      signal: AbortSignal.timeout(5000) // 5 second timeout
+      signal: AbortSignal.timeout(10000) // 10 second timeout (increased from 5)
     });
 
     if (!response.ok) {
-      return null;
+      // 404 means no transactions yet (store is online but empty)
+      // Return a result object to indicate store is online, just no transactions
+      if (response.status === 404) {
+        return { transaction: null, error: "No transactions found" };
+      }
+      // Log other errors for debugging
+      const errorText = await response.text().catch(() => `Status ${response.status}`);
+      console.warn(`[fetchLastTransaction] Failed to fetch from ${storeBaseUrl}/last-transaction:`, response.status, errorText);
+      return null; // Store might be offline (network/server error)
     }
 
     const data = await response.json();
@@ -53,6 +61,9 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
       transaction: data.transaction
     };
   } catch (err) {
+    // Network errors, timeouts, CORS errors indicate the store is offline
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[fetchLastTransaction] Error fetching from ${storeBaseUrl}/last-transaction:`, errorMsg);
     return null; // Store is offline or error occurred
   }
 }

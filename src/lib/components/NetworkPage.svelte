@@ -45,13 +45,20 @@
       const promises = stores.map(async (store) => {
         try {
           const result = await fetchLastTransaction(store.baseUrl);
-          if (result && result.transaction) {
-            store.lastTransaction = result.transaction;
+          if (result) {
+            // Store is online (we got a response)
             store.offline = false;
+            if (result.transaction) {
+              store.lastTransaction = result.transaction;
+            }
+            // If result.transaction is null but result exists, it means "no transactions yet" (404)
+            // Store is still online, just empty
           } else {
+            // result is null = network error, timeout, or CORS issue = store is offline
             store.offline = true;
           }
         } catch (err) {
+          // Exception = store is offline
           store.offline = true;
         } finally {
           store.loading = false;
