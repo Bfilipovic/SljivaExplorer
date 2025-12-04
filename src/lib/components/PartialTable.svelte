@@ -7,6 +7,13 @@
   export let partials: PartialTransaction[] = [];
   export let pagination: Pagination | null = null;
   export let stores: StoreInfo[] = [];
+  
+  // Reactive: log when stores change
+  $: if (stores.length > 0) {
+    console.log("[PartialTable] Stores loaded:", stores.length, stores.map(s => ({ id: s.id, baseUrl: s.baseUrl })));
+  } else {
+    console.warn("[PartialTable] Stores array is empty!");
+  }
 
   $: rangeStart =
     pagination && pagination.total > 0 ? pagination.skip + 1 : partials.length ? 1 : 0;
@@ -162,11 +169,13 @@
           {#each partials as partial}
             <tr>
               <td>
+                {@const partLink = getPartLinkForPartial(partial)}
                 <a
-                  href={getPartLinkForPartial(partial)}
+                  href={partLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   class="part-link"
+                  title={partLink}
                 >
                   {formatAddress(partial.part)}
                 </a>
