@@ -54,34 +54,57 @@
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
     // Use the same logic as NetworkPage's Visit button
+    
+    // Always log for debugging
+    console.log("[PartialTable] Generating part link:", {
+      part: partial.part,
+      storeId: partial.storeId,
+      storesLength: stores.length,
+      storeIds: stores.map(s => s.id),
+      stores: stores.map(s => ({ id: s.id, baseUrl: s.baseUrl }))
+    });
+    
     if (!partial.storeId) {
       console.error("[PartialTable] Partial transaction missing storeId:", partial);
-      return getPartLink(partial.part);
+      // Don't fall back to localhost - return a placeholder
+      return "#";
     }
     
     if (stores.length === 0) {
       console.error("[PartialTable] Stores array is empty! Cannot generate part link for storeId:", partial.storeId);
-      return getPartLink(partial.part);
+      // Don't fall back to localhost - return a placeholder
+      return "#";
     }
     
     const store = stores.find(s => s.id === partial.storeId);
     if (!store) {
       console.error("[PartialTable] Store not found! storeId:", partial.storeId, "Available store IDs:", stores.map(s => s.id));
-      return getPartLink(partial.part);
+      // Don't fall back to localhost - return a placeholder
+      return "#";
     }
     
     if (!store.baseUrl) {
       console.error("[PartialTable] Store has no baseUrl! Store:", store);
-      return getPartLink(partial.part);
+      // Don't fall back to localhost - return a placeholder
+      return "#";
     }
     
     // Use the same function as NetworkPage to get frontend URL
     const frontendUrl = getStoreFrontendUrl(store.baseUrl);
     const link = `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
     
-    // Log warning if we're still getting localhost in production
-    if (frontendUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
-      console.error("[PartialTable] Generated localhost link in production!", {
+    // Always log the generated link
+    console.log("[PartialTable] Generated link:", {
+      link,
+      storeId: partial.storeId,
+      storeBaseUrl: store.baseUrl,
+      frontendUrl,
+      currentHostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown'
+    });
+    
+    // Log error if we're getting localhost in production
+    if (typeof window !== 'undefined' && frontendUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
+      console.error("[PartialTable] ERROR: Generated localhost link in production!", {
         link,
         storeId: partial.storeId,
         storeBaseUrl: store.baseUrl,
