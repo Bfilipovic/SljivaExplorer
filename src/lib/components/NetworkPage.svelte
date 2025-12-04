@@ -45,8 +45,10 @@
       const promises = stores.map(async (store) => {
         try {
           const result = await fetchLastTransaction(store.baseUrl);
+          console.log(`[NetworkPage] Store ${store.name} fetch result:`, result);
           if (result) {
             // Store is online (we got a response)
+            console.log(`[NetworkPage] Marking store ${store.name} as ONLINE`);
             store.offline = false;
             if (result.transaction) {
               store.lastTransaction = result.transaction;
@@ -55,10 +57,12 @@
             // Store is still online, just empty
           } else {
             // result is null = network error, timeout, or CORS issue = store is offline
+            console.log(`[NetworkPage] Marking store ${store.name} as OFFLINE (result is null)`);
             store.offline = true;
           }
         } catch (err) {
           // Exception = store is offline
+          console.error(`[NetworkPage] Exception fetching store ${store.name}:`, err);
           store.offline = true;
         } finally {
           store.loading = false;

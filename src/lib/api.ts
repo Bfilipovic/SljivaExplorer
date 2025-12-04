@@ -50,6 +50,7 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
       // Try to parse JSON - for 304, body might be empty (cached) or contain data
       try {
         const data = await response.json();
+        console.log(`[fetchLastTransaction] Successfully parsed response from ${storeBaseUrl}/last-transaction (status ${response.status}):`, data);
         return {
           transaction: data.transaction
         };
