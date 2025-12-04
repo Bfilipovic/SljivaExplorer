@@ -37,7 +37,18 @@
       const hostname = url.hostname;
       const protocol = url.protocol;
       
-      // For localhost, use port 5173 for frontend (standard Vite dev port)
+      // Check if we're in the browser and on a production domain
+      const isProduction = typeof window !== 'undefined' && 
+                          !window.location.hostname.includes('localhost') && 
+                          !window.location.hostname.includes('127.0.0.1');
+      
+      // If baseUrl has localhost but we're in production browser, use current domain
+      if ((hostname === 'localhost' || hostname === '127.0.0.1') && isProduction) {
+        // Use the current browser's origin (production domain)
+        return window.location.origin;
+      }
+      
+      // For localhost in development, use port 5173 for frontend (standard Vite dev port)
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return `${protocol}//${hostname}:5173`;
       }
@@ -49,11 +60,30 @@
       const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
       if (match) {
         const base = match[1];
+        
+        // Check if we're in production browser
+        const isProduction = typeof window !== 'undefined' && 
+                            !window.location.hostname.includes('localhost') && 
+                            !window.location.hostname.includes('127.0.0.1');
+        
+        // If base has localhost but we're in production, use current domain
+        if (base.includes('localhost') && isProduction) {
+          return window.location.origin;
+        }
+        
         if (base.includes('localhost')) {
           return base.replace(/:(\d+)/, ':5173');
         }
         return base;
       }
+      
+      // Last resort: if we're in production browser, use current origin
+      if (typeof window !== 'undefined' && 
+          !window.location.hostname.includes('localhost') && 
+          !window.location.hostname.includes('127.0.0.1')) {
+        return window.location.origin;
+      }
+      
       return baseUrl;
     }
   }
