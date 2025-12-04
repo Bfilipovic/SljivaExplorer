@@ -27,24 +27,25 @@
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
     // We know which store this partial came from, so use its baseUrl
-    if (partial.storeId) {
-      if (stores.length === 0) {
-        console.warn("[PartialTable] Stores array is empty, cannot generate part link for store:", partial.storeId);
-      } else {
-        const store = stores.find(s => s.id === partial.storeId);
-        if (store && store.baseUrl) {
-          // Derive frontend URL from the store's API baseUrl
-          const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
-          return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
-        } else {
-          console.warn("[PartialTable] Store not found in stores array:", partial.storeId, "Available stores:", stores.map(s => s.id));
+    if (partial.storeId && stores.length > 0) {
+      const store = stores.find(s => s.id === partial.storeId);
+      if (store && store.baseUrl) {
+        // Derive frontend URL from the store's API baseUrl
+        // baseUrl is like: https://store.example.com/api/explorer
+        // We need: https://store.example.com
+        const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
+        const link = `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
+        // Debug: log if we're still getting localhost
+        if (frontendUrl.includes('localhost')) {
+          console.warn("[PartialTable] Generated localhost link:", link, "Store:", store.id, "baseUrl:", store.baseUrl);
         }
+        return link;
       }
-    } else {
-      console.warn("[PartialTable] Partial transaction has no storeId:", partial);
     }
-    // Fallback to default if store not found - but this should rarely happen
-    console.warn("[PartialTable] Falling back to default part link for:", partial.part);
+    
+    // Fallback - this should not happen in production
+    // If we get here, either stores array is empty or storeId doesn't match
+    console.error("[PartialTable] Cannot generate part link - storeId:", partial.storeId, "stores length:", stores.length, "available store IDs:", stores.map(s => s.id));
     return getPartLink(partial.part);
   }
 
