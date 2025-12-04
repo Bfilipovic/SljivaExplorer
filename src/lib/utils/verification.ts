@@ -26,32 +26,78 @@ export interface VerificationResult {
 export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
   const gateway = "https://arweave.net";
   
-  // First, get transaction info to get the data format
-  const txResponse = await fetch(`${gateway}/tx/${arweaveTxId}`);
-  if (!txResponse.ok) {
-    throw new Error(`Failed to fetch Arweave transaction metadata: ${txResponse.status}`);
-  }
-  
-  const txInfo = await txResponse.json();
-  
-  // Fetch the actual data
-  const dataResponse = await fetch(`${gateway}/${arweaveTxId}`);
-  if (!dataResponse.ok) {
-    throw new Error(`Failed to fetch Arweave transaction data: ${dataResponse.status}`);
-  }
-  
-  // Try to parse as JSON
   try {
-    const dataText = await dataResponse.text();
-    return JSON.parse(dataText);
-  } catch (error) {
-    // If not JSON, try to decode as base64
-    try {
-      const dataText = await dataResponse.text();
-      return JSON.parse(atob(dataText));
-    } catch {
-      throw new Error(`Failed to parse Arweave transaction data: ${error instanceof Error ? error.message : String(error)}`);
+    // First, get transaction info to get the data format
+    const txResponse = await fetch(`${gateway}/tx/${arweaveTxId}`);
+    if (!txResponse.ok) {
+      const errorText = await txResponse.text().catch(() => '');
+      throw new Error(`Failed to fetch Arweave transaction metadata: ${txResponse.status}${errorText ? ` - ${errorText.substring(0, 100)}` : ''}`);
     }
+    
+    // Parse transaction info - read as text first so we can provide better errors
+    const txText = await txResponse.text();
+    let txInfo: any;
+    try {
+      txInfo = JSON.parse(txText);
+    } catch (jsonError) {
+      const contentType = txResponse.headers.get('content-type') || 'unknown';
+      throw new Error(
+        `Failed to parse Arweave transaction metadata as JSON. ` +
+        `Content-Type: ${contentType}. ` +
+        `Response preview: ${txText.substring(0, 300)}. ` +
+        `Error: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`
+      );
+    }
+    
+    // Fetch the actual data
+    const dataResponse = await fetch(`${gateway}/${arweaveTxId}`);
+    if (!dataResponse.ok) {
+      const errorText = await dataResponse.text().catch(() => '');
+      throw new Error(`Failed to fetch Arweave transaction data: ${dataResponse.status}${errorText ? ` - ${errorText.substring(0, 100)}` : ''}`);
+    }
+    
+    // Get the response text once
+    const dataText = await dataResponse.text();
+    
+    // Check if response is empty
+    if (!dataText || dataText.trim().length === 0) {
+      throw new Error('Arweave transaction data is empty');
+    }
+    
+    // Check content type
+    const dataContentType = dataResponse.headers.get('content-type') || '';
+    
+    // Trim whitespace before parsing
+    const trimmed = dataText.trim();
+    
+    // Try to parse as JSON first
+    try {
+      return JSON.parse(trimmed);
+    } catch (jsonError) {
+      // If JSON parsing failed, try base64 decode
+      try {
+        // Try to decode as base64
+        const decoded = atob(trimmed);
+        return JSON.parse(decoded);
+      } catch (base64Error) {
+        // Both failed - provide helpful error
+        const preview = trimmed.substring(0, 200);
+        throw new Error(
+          `Failed to parse Arweave transaction data. ` +
+          `Content-Type: ${dataContentType}. ` +
+          `Response length: ${trimmed.length} chars. ` +
+          `Preview: ${preview}... ` +
+          `JSON error: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}. ` +
+          `Base64 error: ${base64Error instanceof Error ? base64Error.message : String(base64Error)}`
+        );
+      }
+    }
+  } catch (error) {
+    // Re-throw with more context
+    if (error instanceof Error && error.message.includes('Arweave')) {
+      throw error;
+    }
+    throw new Error(`Error fetching Arweave transaction ${arweaveTxId}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
