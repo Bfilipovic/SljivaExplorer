@@ -27,15 +27,24 @@
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
     // We know which store this partial came from, so use its baseUrl
-    if (partial.storeId && stores.length > 0) {
-      const store = stores.find(s => s.id === partial.storeId);
-      if (store && store.baseUrl) {
-        // Derive frontend URL from the store's API baseUrl
-        const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
-        return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
+    if (partial.storeId) {
+      if (stores.length === 0) {
+        console.warn("[PartialTable] Stores array is empty, cannot generate part link for store:", partial.storeId);
+      } else {
+        const store = stores.find(s => s.id === partial.storeId);
+        if (store && store.baseUrl) {
+          // Derive frontend URL from the store's API baseUrl
+          const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
+          return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
+        } else {
+          console.warn("[PartialTable] Store not found in stores array:", partial.storeId, "Available stores:", stores.map(s => s.id));
+        }
       }
+    } else {
+      console.warn("[PartialTable] Partial transaction has no storeId:", partial);
     }
-    // Fallback to default if store not found
+    // Fallback to default if store not found - but this should rarely happen
+    console.warn("[PartialTable] Falling back to default part link for:", partial.part);
     return getPartLink(partial.part);
   }
 
