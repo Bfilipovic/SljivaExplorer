@@ -20,10 +20,17 @@ export function getStoreFrontendUrl(): string {
 /**
  * Get store frontend URL from store baseUrl (API URL)
  * Derives frontend URL by removing /api/explorer from baseUrl
+ * Preserves protocol and hostname
  */
 export function getStoreFrontendUrlFromBaseUrl(baseUrl: string): string {
-  // Remove /api/explorer and trailing slashes
-  return baseUrl.replace(/\/api\/explorer.*$/, '').replace(/\/$/, '');
+  try {
+    const url = new URL(baseUrl);
+    // Return just the origin (protocol + hostname + port)
+    return url.origin;
+  } catch {
+    // Fallback: Remove /api/explorer and trailing slashes
+    return baseUrl.replace(/\/api\/explorer.*$/, '').replace(/\/$/, '');
+  }
 }
 
 /**
@@ -45,12 +52,9 @@ export function getPartLink(
   if (storeId && stores) {
     const store = stores.find(s => s.id === storeId);
     if (store) {
-      // Prefer website field if available, otherwise derive from baseUrl
-      if (store.website) {
-        base = store.website.replace(/\/$/, '');
-      } else {
-        base = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
-      }
+      // Always derive from baseUrl which has the full URL with protocol
+      // The website field is just a display name without protocol
+      base = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
     } else {
       base = getStoreFrontendUrl();
     }
