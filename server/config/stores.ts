@@ -53,14 +53,23 @@ function parseStoresFromEnv(): StoreConfig[] {
 
       const baseUrl = String(item.baseUrl).replace(/\/$/, ""); // Remove trailing slash
       
-      // Default icon for localhost stores if not specified
+      // Default icon if not specified - construct from baseUrl
       let icon = item.icon ? String(item.icon) : undefined;
       if (!icon) {
         try {
           const url = new URL(baseUrl);
-          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+          const protocol = url.protocol || 'https:';
+          const hostname = url.hostname;
+          
+          if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            // Default icon for localhost
             const frontendPort = process.env.FRONTEND_PORT || '5173';
             icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+          } else {
+            // Default icon for production stores: use the store's domain
+            // Remove /api/explorer from baseUrl to get the frontend URL
+            const frontendBase = baseUrl.replace(/\/api\/explorer.*$/, '');
+            icon = `${frontendBase}/sljiva_icon.png`;
           }
         } catch {
           // If URL parsing fails, skip default icon
