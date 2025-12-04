@@ -32,59 +32,19 @@
   }
 
   function getStoreFrontendUrl(baseUrl: string): string {
+    // Always use the current browser's origin (production domain)
+    // This works even if backend returns localhost (Docker internal communication)
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    
+    // Fallback for SSR: try to extract from baseUrl
     try {
       const url = new URL(baseUrl);
-      const hostname = url.hostname;
-      const protocol = url.protocol;
-      
-      // Check if we're in the browser and on a production domain
-      const isProduction = typeof window !== 'undefined' && 
-                          !window.location.hostname.includes('localhost') && 
-                          !window.location.hostname.includes('127.0.0.1');
-      
-      // If baseUrl has localhost but we're in production browser, use current domain
-      if ((hostname === 'localhost' || hostname === '127.0.0.1') && isProduction) {
-        // Use the current browser's origin (production domain)
-        return window.location.origin;
-      }
-      
-      // For localhost in development, use port 5173 for frontend (standard Vite dev port)
-      if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${protocol}//${hostname}:5173`;
-      }
-      
-      // For production, remove /api/explorer path and use base domain
-      return baseUrl.replace(/\/api\/explorer.*$/, "");
+      return url.origin;
     } catch {
-      // Fallback: try regex extraction
-      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
-      if (match) {
-        const base = match[1];
-        
-        // Check if we're in production browser
-        const isProduction = typeof window !== 'undefined' && 
-                            !window.location.hostname.includes('localhost') && 
-                            !window.location.hostname.includes('127.0.0.1');
-        
-        // If base has localhost but we're in production, use current domain
-        if (base.includes('localhost') && isProduction) {
-          return window.location.origin;
-        }
-        
-        if (base.includes('localhost')) {
-          return base.replace(/:(\d+)/, ':5173');
-        }
-        return base;
-      }
-      
-      // Last resort: if we're in production browser, use current origin
-      if (typeof window !== 'undefined' && 
-          !window.location.hostname.includes('localhost') && 
-          !window.location.hostname.includes('127.0.0.1')) {
-        return window.location.origin;
-      }
-      
-      return baseUrl;
+      // Last resort: remove /api/explorer path
+      return baseUrl.replace(/\/api\/explorer.*$/, "");
     }
   }
 
