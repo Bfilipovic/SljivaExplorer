@@ -4,6 +4,7 @@
   import ResultPanel from "./lib/components/ResultPanel.svelte";
   import NetworkPage from "./lib/components/NetworkPage.svelte";
   import VerificationPage from "./lib/components/VerificationPage.svelte";
+  import TermsOfServicePage from "./lib/components/TermsOfServicePage.svelte";
   import TermsOfServiceModal from "./lib/components/TermsOfServiceModal.svelte";
   import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
   import { unifiedSearch, fetchStores } from "./lib/api";
@@ -233,9 +234,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
         <h2>Terms of Service</h2>
       </div>
       <div class="content-body">
-        {#each tosText.split('\n') as line}
-          <p>{line}</p>
-        {/each}
+        <TermsOfServicePage />
       </div>
     </div>
   {:else if activeSection === 'verification'}

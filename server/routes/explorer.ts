@@ -132,7 +132,7 @@ router.get("/stores", (req, res) => {
             // Ensure localhost stores have a default icon if not set
             if (!icon) {
               const frontendPort = process.env.FRONTEND_PORT || '5173';
-              icon = `http://localhost:${frontendPort}/nomin_icon.png`;
+              icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
             }
           } else {
             // For other domains, add www prefix
@@ -153,7 +153,7 @@ router.get("/stores", (req, res) => {
               // Ensure localhost stores have a default icon if not set
               if (!icon) {
                 const frontendPort = process.env.FRONTEND_PORT || '5173';
-                icon = `http://localhost:${frontendPort}/nomin_icon.png`;
+                icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
               }
             } else {
               website = hostname.startsWith('www.') ? hostname : `www.${hostname}`;
