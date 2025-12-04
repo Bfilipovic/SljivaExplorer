@@ -2,6 +2,8 @@
  * Store link utilities
  */
 
+import type { StoreInfo } from "../types";
+
 /**
  * Get the store frontend URL from environment or default to localhost:5173
  */
@@ -16,10 +18,50 @@ export function getStoreFrontendUrl(): string {
 }
 
 /**
- * Generate a link to a part in the store frontend
+ * Get store frontend URL from store baseUrl (API URL)
+ * Derives frontend URL by removing /api/explorer from baseUrl
  */
-export function getPartLink(partHash: string): string {
-  const base = getStoreFrontendUrl();
+export function getStoreFrontendUrlFromBaseUrl(baseUrl: string): string {
+  // Remove /api/explorer and trailing slashes
+  return baseUrl.replace(/\/api\/explorer.*$/, '').replace(/\/$/, '');
+}
+
+/**
+ * Generate a link to a part in the store frontend
+ * @param partHash - The part hash/ID
+ * @param storeBaseUrl - Optional store API baseUrl to derive frontend URL from
+ * @param stores - Optional array of stores to look up storeId
+ * @param storeId - Optional store ID to look up in stores array
+ */
+export function getPartLink(
+  partHash: string,
+  storeBaseUrl?: string,
+  stores?: StoreInfo[],
+  storeId?: string
+): string {
+  let base: string;
+  
+  // If storeId is provided and stores array is available, look up the store
+  if (storeId && stores) {
+    const store = stores.find(s => s.id === storeId);
+    if (store) {
+      // Prefer website field if available, otherwise derive from baseUrl
+      if (store.website) {
+        base = store.website.replace(/\/$/, '');
+      } else {
+        base = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
+      }
+    } else {
+      base = getStoreFrontendUrl();
+    }
+  } else if (storeBaseUrl) {
+    // Derive frontend URL from API baseUrl
+    base = getStoreFrontendUrlFromBaseUrl(storeBaseUrl);
+  } else {
+    // Fallback to default
+    base = getStoreFrontendUrl();
+  }
+  
   return `${base}/part/${encodeURIComponent(partHash)}`;
 }
 

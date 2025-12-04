@@ -221,7 +221,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     </div>
 
     {#if result}
-      <ResultPanel {result} on:search={handleSearch} on:navigateToVerification={() => {
+      <ResultPanel {result} {stores} on:search={handleSearch} on:navigateToVerification={() => {
         setActiveSection('verification');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }} />

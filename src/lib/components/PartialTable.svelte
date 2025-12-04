@@ -1,10 +1,12 @@
 <script lang="ts">
-  import type { PartialTransaction, Pagination } from "../types";
+  import type { PartialTransaction, Pagination, StoreInfo } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
+  import { getPartLink } from "../utils/storeLinks";
 
   export let title: string;
   export let partials: PartialTransaction[] = [];
   export let pagination: Pagination | null = null;
+  export let stores: StoreInfo[] = [];
 
   $: rangeStart =
     pagination && pagination.total > 0 ? pagination.skip + 1 : partials.length ? 1 : 0;
@@ -20,6 +22,35 @@
       ? "https://solscan.io/tx/"
       : "https://etherscan.io/tx/";
     return `${base}${hash}`;
+  }
+
+  function getPartLinkForPartial(partial: PartialTransaction): string {
+    // Get store baseUrl from stores array if storeId is available
+    let storeBaseUrl: string | undefined;
+    if (partial.storeId && stores.length > 0) {
+      const store = stores.find(s => s.id === partial.storeId);
+      if (store) {
+        storeBaseUrl = store.baseUrl;
+      }
+    }
+    return getPartLink(partial.part, storeBaseUrl, stores, partial.storeId);
+  }
+
+  function getTransactionId(partial: PartialTransaction): string | null {
+    // Return the parent transaction ID (transaction field takes precedence over txId)
+    return partial.transaction || partial.txId || null;
+  }
+
+  async function copyTransactionId(partial: PartialTransaction) {
+    const txId = getTransactionId(partial);
+    if (!txId) return;
+    
+    try {
+      await navigator.clipboard.writeText(txId);
+      // You could add a toast notification here if desired
+    } catch (err) {
+      console.error("Failed to copy transaction ID:", err);
+    }
   }
 </script>
 
@@ -44,12 +75,22 @@
             <th>Chain Hash</th>
             <th>Timestamp</th>
             <th>Store</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {#each partials as partial}
             <tr>
-              <td>{formatAddress(partial.part)}</td>
+              <td>
+                <a
+                  href={getPartLinkForPartial(partial)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="part-link"
+                >
+                  {formatAddress(partial.part)}
+                </a>
+              </td>
               <td>{formatAddress(partial.from)}</td>
               <td>{formatAddress(partial.to)}</td>
               <td>{formatAmount(partial.amount, partial.currency)}</td>
@@ -69,6 +110,21 @@
               </td>
               <td>{formatDate(partial.timestamp)}</td>
               <td>{partial.storeName ?? "—"}</td>
+              <td>
+                {#if getTransactionId(partial)}
+                  <button
+                    type="button"
+                    class="copy-button"
+                    on:click={() => copyTransactionId(partial)}
+                    title="Copy transaction ID"
+                    aria-label="Copy transaction ID"
+                  >
+                    📋
+                  </button>
+                {:else}
+                  —
+                {/if}
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -154,5 +210,34 @@
 
   .tx-link:hover {
     text-decoration: underline;
+  }
+
+  .part-link {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .part-link:hover {
+    text-decoration: underline;
+  }
+
+  .copy-button {
+    background: transparent;
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    font-size: 1rem;
+    color: var(--text-primary);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .copy-button:hover {
+    background: var(--card-bg);
+    border-color: var(--accent);
+  }
+
+  .copy-button:active {
+    transform: scale(0.95);
   }
 </style>
