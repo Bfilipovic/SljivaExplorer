@@ -43,6 +43,7 @@ The content is organized as follows:
 docs/
   backend-api-reference.md
   DEPLOYMENT.md
+  DOMAIN_SETUP.md
   INSTALLATION.md
   integration-notes.md
   README.md
@@ -92,6 +93,7 @@ tests/
 .gitignore
 ADD_YOUR_STORE.md
 Dockerfile
+explorer-nginx.conf
 index.html
 LOCAL_SETUP.md
 orchestrate
@@ -189,6 +191,173 @@ The Explorer may reuse the existing store APIs when necessary:
 - Addresses are stored in lowercase.
 - Part `_id` values are SHA-256 hashes of `{ part_no, parent_hash, owner, listing }`.
 - Transaction amounts are stored as strings; format on the frontend as needed.
+</file>
+
+<file path="docs/DOMAIN_SETUP.md">
+# Setting Up Explorer Domain
+
+This guide explains how to configure the explorer to work with a custom domain (e.g., `nft.nomin.foundation`).
+
+## Prerequisites
+
+1. DNS record pointing your domain to your server IP
+2. Nginx installed on your server
+3. Explorer running on port 4175
+
+## DNS Configuration
+
+First, ensure your DNS is configured correctly:
+
+```
+Type: A
+Name: nft (or @ for root domain)
+Value: 161.97.146.46
+TTL: 3600 (or default)
+```
+
+## Nginx Configuration
+
+### Option 1: Add to Existing Nginx Configuration
+
+If you already have nginx running, add the explorer server block to your existing configuration:
+
+```nginx
+# Explorer server block
+server {
+    listen 80;
+    server_name nft.nomin.foundation;
+
+    # Explorer API routes
+    location /api/explorer {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Static files and SPA routes
+    location / {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Option 2: Separate Configuration File
+
+1. Copy the example configuration:
+   ```bash
+   cp explorer-nginx.conf /etc/nginx/sites-available/nft.nomin.foundation
+   ```
+
+2. Edit the file to match your setup:
+   ```bash
+   sudo nano /etc/nginx/sites-available/nft.nomin.foundation
+   ```
+
+3. Create symbolic link to enable:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/nft.nomin.foundation /etc/nginx/sites-enabled/
+   ```
+
+4. Test nginx configuration:
+   ```bash
+   sudo nginx -t
+   ```
+
+5. Reload nginx:
+   ```bash
+   sudo systemctl reload nginx
+   ```
+
+## Verifying Setup
+
+1. Check DNS resolution:
+   ```bash
+   dig nft.nomin.foundation
+   # or
+   nslookup nft.nomin.foundation
+   ```
+
+2. Test from browser:
+   - Open `http://nft.nomin.foundation`
+   - Should see the explorer interface
+
+3. Test API endpoint:
+   ```bash
+   curl http://nft.nomin.foundation/api/explorer/stores
+   ```
+
+## HTTPS Setup (Recommended)
+
+For production, you should set up HTTPS using Let's Encrypt:
+
+1. Install Certbot:
+   ```bash
+   sudo apt update
+   sudo apt install certbot python3-certbot-nginx
+   ```
+
+2. Get SSL certificate:
+   ```bash
+   sudo certbot --nginx -d nft.nomin.foundation
+   ```
+
+3. Certbot will automatically update your nginx configuration and set up automatic renewal.
+
+After HTTPS is set up, you can:
+- Use `crypto.subtle` for transaction verification (requires secure context)
+- Improve security and SEO
+
+## Troubleshooting
+
+### Domain doesn't resolve
+
+- Check DNS records: `dig nft.nomin.foundation`
+- Verify DNS propagation: https://www.whatsmydns.net/
+- Check firewall rules on port 80/443
+
+### 502 Bad Gateway
+
+- Verify explorer is running: `curl http://localhost:4175/health`
+- Check nginx error logs: `sudo tail -f /var/log/nginx/error.log`
+- Verify port 4175 is accessible internally
+
+### CORS Errors
+
+The explorer server should accept requests from any origin in production. If you see CORS errors:
+- Check that the explorer server is running in production mode
+- Verify nginx is passing the correct headers
+
+### Explorer shows but API doesn't work
+
+- Check nginx configuration for `/api/explorer` location block
+- Verify proxy_pass points to `http://localhost:4175`
+- Check explorer server logs for errors
+
+## Multiple Domains
+
+If you want to serve both the store and explorer from the same server:
+
+```nginx
+# Store domain
+server {
+    listen 80;
+    server_name kodak.beogradfilm.com;
+    # ... store configuration
+}
+
+# Explorer domain
+server {
+    listen 80;
+    server_name nft.nomin.foundation;
+    # ... explorer configuration (from above)
+}
+```
 </file>
 
 <file path="docs/integration-notes.md">
@@ -1391,6 +1560,77 @@ If these return errors, check that:
 - The domain/port is correct
 </file>
 
+<file path="explorer-nginx.conf">
+# Nginx configuration for Explorer
+# This file should be placed in /etc/nginx/sites-available/ or included in your nginx config
+
+# Explorer server block
+server {
+    listen 80;
+    server_name nft.nomin.foundation;
+
+    # Explorer API routes (must come before / location)
+    location /api/explorer {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Increase timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health check
+    location /health {
+        proxy_pass http://localhost:4175/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Static files and SPA routes
+    location / {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Increase timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+}
+
+# Optional: HTTPS configuration (uncomment after SSL certificate setup)
+# server {
+#     listen 443 ssl http2;
+#     server_name nft.nomin.foundation;
+#
+#     ssl_certificate /path/to/ssl/cert.pem;
+#     ssl_certificate_key /path/to/ssl/key.pem;
+#
+#     # Same location blocks as above
+#     # ...
+#
+#     # Redirect HTTP to HTTPS
+#     # location / {
+#     #     return 301 https://$server_name$request_uri;
+#     # }
+# }
+
+# Redirect HTTP to HTTPS (uncomment after SSL setup)
+# server {
+#     listen 80;
+#     server_name nft.nomin.foundation;
+#     return 301 https://$server_name$request_uri;
+# }
+</file>
+
 <file path="LOCAL_SETUP.md">
 # Local Development Setup
 
@@ -2355,292 +2595,6 @@ fi
 </style>
 </file>
 
-<file path="src/lib/utils/hash.ts">
-/**
- * Client-side hash calculation utilities
- * Ported from backend/utils/hash.js for transaction verification
- * 
- * IMPORTANT: This must match backend/utils/hash.js exactly!
- */
-
-/**
- * Deterministic stringify function for consistent hashing.
- * Handles object key sorting, Date serialization, null/undefined normalization
- */
-function deterministicStringify(obj: any): string {
-  if (obj === null) {
-    return "null";
-  }
-  if (obj === undefined) {
-    return "undefined";
-  }
-  
-  // Handle primitives
-  if (typeof obj !== "object") {
-    return JSON.stringify(obj);
-  }
-  
-  // Handle Date objects
-  if (obj instanceof Date) {
-    return JSON.stringify(obj.toISOString());
-  }
-  
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    const items = obj.map(item => deterministicStringify(item));
-    return `[${items.join(",")}]`;
-  }
-  
-  // Handle objects - sort keys for consistency
-  const sortedKeys = Object.keys(obj).sort();
-  const pairs = sortedKeys.map(key => {
-    const value = obj[key];
-    // Skip undefined values to maintain consistency
-    if (value === undefined) {
-      return null;
-    }
-    const serializedValue = deterministicStringify(value);
-    return `${JSON.stringify(key)}:${serializedValue}`;
-  }).filter((pair): pair is string => pair !== null);
-  
-  return `{${pairs.join(",")}}`;
-}
-
-/**
- * Hash an object deterministically using SHA-256
- */
-async function hashObject(obj: any): Promise<string> {
-  const serialized = deterministicStringify(obj);
-  const encoder = new TextEncoder();
-  const data = encoder.encode(serialized);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-/**
- * Create a hashable representation of a Transaction for hashing.
- * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
- * 
- * Handles all transaction types:
- * - MINT
- * - LISTING_CREATE
- * - LISTING_CANCEL
- * - NFT_BUY
- * - GIFT_CREATE
- * - GIFT_CLAIM
- * - GIFT_REFUSE
- * - GIFT_CANCEL
- * 
- * Excludes _id and arweaveTxId (since _id will be the hash itself).
- * Includes signer and signature fields if present.
- */
-function hashableTransaction(transaction: any): any {
-  // Exclude technical metadata that should not be in hash
-  const { _id, arweaveTxId, previous_arweave_tx, ...rest } = transaction;
-  const type = String(rest.type || "");
-  
-  // Base fields present in all transaction types
-  const base: any = {
-    type,
-    transaction_number: Number(rest.transaction_number || 0),
-    timestamp: rest.timestamp instanceof Date 
-      ? rest.timestamp 
-      : new Date(rest.timestamp || Date.now()),
-  };
-  
-  // Type-specific field handling - MUST MATCH BACKEND EXACTLY
-  switch (type) {
-    case "MINT": {
-      const minter = String(rest.buyer || rest.seller || rest.creator || "").toLowerCase();
-      base.nftId = String(rest.nftId || "");
-      base.quantity = Number(rest.quantity || 0);
-      base.buyer = minter;
-      base.seller = minter;
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "LISTING_CREATE": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.nftId = String(rest.nftId || "");
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.price = String(rest.price || "");
-      base.currency = String(rest.currency || "");
-      if (rest.sellerWallets && typeof rest.sellerWallets === 'object') {
-        // Sort wallet keys for deterministic hashing
-        base.sellerWallets = Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
-          acc[key] = String(rest.sellerWallets[key]);
-          return acc;
-        }, {} as any);
-      }
-      base.bundleSale = rest.bundleSale === true || rest.bundleSale === "true";
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "LISTING_CANCEL": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.seller = String(rest.seller || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "NFT_BUY": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
-        ? String(rest.reservationId) 
-        : null;
-      base.nftId = String(rest.nftId || "");
-      base.buyer = String(rest.buyer || "").toLowerCase();
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CREATE": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CLAIM": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_REFUSE": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CANCEL": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    // Legacy types for backward compatibility
-    case "TRANSACTION": {
-      // Legacy TRANSACTION type - map to NFT_BUY structure
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
-        ? String(rest.reservationId) 
-        : null;
-      base.nftId = String(rest.nftId || "");
-      base.buyer = String(rest.buyer || "").toLowerCase();
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT": {
-      // Legacy GIFT type - map to GIFT_CLAIM structure
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    default:
-      throw new Error(`Unknown transaction type: ${type}`);
-  }
-  
-  return base;
-}
-
-/**
- * Calculate the expected hash for a transaction
- */
-export async function calculateTransactionHash(transaction: any): Promise<string> {
-  const hashable = hashableTransaction(transaction);
-  return await hashObject(hashable);
-}
-</file>
-
 <file path="src/lib/utils/storeLinks.ts">
 /**
  * Store link utilities
@@ -2686,349 +2640,6 @@ export function getArweaveTxLink(arweaveTxId: string): string {
   // Use viewblock.io Arweave explorer for better UX (can be configured via env)
   const explorer = import.meta.env.VITE_ARWEAVE_EXPLORER || 'https://viewblock.io/arweave/tx';
   return `${explorer.replace(/\/$/, '')}/${arweaveTxId}`;
-}
-</file>
-
-<file path="src/lib/utils/verification.ts">
-/**
- * Transaction verification utilities
- */
-
-import type { ExplorerTransaction } from "../types";
-import { calculateTransactionHash } from "./hash";
-
-export interface VerificationCheck {
-  name: string;
-  passed: boolean;
-  message?: string;
-}
-
-export interface VerificationResult {
-  verified: boolean;
-  errors: string[];
-  checks: VerificationCheck[];
-  hashMatch?: boolean;
-  arweaveMatch?: boolean;
-}
-
-/**
- * Fetch transaction data from Arweave
- * Arweave stores transaction data, and we need to fetch it from the gateway
- */
-export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
-  const gateway = "https://arweave.net";
-  
-  // First, get transaction info to get the data format
-  const txResponse = await fetch(`${gateway}/tx/${arweaveTxId}`);
-  if (!txResponse.ok) {
-    throw new Error(`Failed to fetch Arweave transaction metadata: ${txResponse.status}`);
-  }
-  
-  const txInfo = await txResponse.json();
-  
-  // Fetch the actual data
-  const dataResponse = await fetch(`${gateway}/${arweaveTxId}`);
-  if (!dataResponse.ok) {
-    throw new Error(`Failed to fetch Arweave transaction data: ${dataResponse.status}`);
-  }
-  
-  // Try to parse as JSON
-  try {
-    const dataText = await dataResponse.text();
-    return JSON.parse(dataText);
-  } catch (error) {
-    // If not JSON, try to decode as base64
-    try {
-      const dataText = await dataResponse.text();
-      return JSON.parse(atob(dataText));
-    } catch {
-      throw new Error(`Failed to parse Arweave transaction data: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-}
-
-/**
- * Normalize a value for comparison (handles dates, strings, numbers)
- */
-function normalizeValue(value: any): any {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (typeof value === "string") {
-    // Normalize empty strings to null for chainTx
-    return value.trim().toLowerCase() || null;
-  }
-  if (typeof value === "number") {
-    return value;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  // Handle date strings - convert to ISO string for comparison
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
-    return new Date(value).toISOString();
-  }
-  return String(value).toLowerCase();
-}
-
-/**
- * Normalize a transaction for comparison
- * Maps buyer/seller to giver/receiver for GIFT transactions
- */
-function normalizeTransactionForComparison(tx: any): any {
-  const normalized = { ...tx };
-  
-  // For GIFT transactions: explorer API maps giver->seller, receiver->buyer
-  // But Arweave stores giver/receiver, so normalize explorer format to match Arweave
-  if (tx.type === "GIFT") {
-    // Always map seller -> giver and buyer -> receiver if giver/receiver don't exist
-    if (tx.giver === undefined || tx.giver === null) {
-      normalized.giver = tx.seller || "";
-    }
-    if (tx.receiver === undefined || tx.receiver === null) {
-      normalized.receiver = tx.buyer || "";
-    }
-  }
-  
-  return normalized;
-}
-
-/**
- * Compare transaction fields between local and Arweave data
- */
-function compareTransactionFields(local: any, arweave: any): string[] {
-  const errors: string[] = [];
-  
-  // Normalize local transaction to match Arweave format
-  const normalizedLocal = normalizeTransactionForComparison(local);
-  
-  // Fields to compare (excluding transactionId and previous_arweave_tx which are metadata)
-  const fieldsToCompare = [
-    "type",
-    "transaction_number",
-    "nftId",
-    "quantity",
-    "chainTx",
-    "currency",
-    "amount",
-    "timestamp",
-    "signer",    // Added for signature verification
-    "signature", // Added for signature verification
-  ];
-  
-  // Add type-specific fields
-  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
-    fieldsToCompare.push("giver", "receiver");
-    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
-  } else if (normalizedLocal.type === "MINT") {
-    fieldsToCompare.push("buyer", "seller");
-  } else if (normalizedLocal.type === "LISTING_CREATE") {
-    fieldsToCompare.push("seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.price) fieldsToCompare.push("price");
-    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
-    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
-  } else {
-    fieldsToCompare.push("buyer", "seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.reservationId) fieldsToCompare.push("reservationId");
-  }
-  
-  for (const field of fieldsToCompare) {
-    const localValue = normalizeValue(normalizedLocal[field]);
-    const arweaveValue = normalizeValue(arweave[field]);
-    
-    // Special handling for timestamp - compare ISO strings
-    if (field === "timestamp") {
-      const localDate = normalizedLocal.timestamp instanceof Date 
-        ? normalizedLocal.timestamp.toISOString() 
-        : new Date(normalizedLocal.timestamp).toISOString();
-      const arweaveDate = arweave.timestamp instanceof Date
-        ? arweave.timestamp.toISOString()
-        : new Date(arweave.timestamp).toISOString();
-      
-      if (localDate !== arweaveDate) {
-        errors.push(`Field ${field} mismatch: local=${localDate}, arweave=${arweaveDate}`);
-      }
-      continue;
-    }
-    
-    // Special handling for sellerWallets (object comparison)
-    if (field === "sellerWallets") {
-      const localWallets = JSON.stringify(Object.keys(localValue || {}).sort().reduce((acc: any, key: string) => {
-        acc[key] = String(localValue[key]);
-        return acc;
-      }, {}));
-      const arweaveWallets = JSON.stringify(Object.keys(arweaveValue || {}).sort().reduce((acc: any, key: string) => {
-        acc[key] = String(arweaveValue[key]);
-        return acc;
-      }, {}));
-      if (localWallets !== arweaveWallets) {
-        errors.push(`Field ${field} mismatch: local=${localWallets}, arweave=${arweaveWallets}`);
-      }
-      continue;
-    }
-    
-    if (localValue !== arweaveValue) {
-      errors.push(`Field ${field} mismatch: local=${localValue}, arweave=${arweaveValue}`);
-    }
-  }
-  
-  return errors;
-}
-
-/**
- * Verify a transaction
- * 1. Calculates hash and compares with transaction ID
- * 2. If Arweave transaction exists, fetches and compares all fields
- */
-export async function verifyTransaction(
-  transaction: ExplorerTransaction,
-  updateStep: (step: string) => void
-): Promise<VerificationResult> {
-  const errors: string[] = [];
-  const checks: VerificationCheck[] = [];
-  let hashMatch = false;
-  let arweaveMatch = false;
-  
-  try {
-    // Step 1: Calculate hash
-    updateStep("Calculating hash");
-    const calculatedHash = await calculateTransactionHash(transaction);
-    hashMatch = calculatedHash === transaction._id;
-    
-    checks.push({
-      name: "Hash Calculation",
-      passed: hashMatch,
-      message: hashMatch 
-        ? "Transaction hash matches the stored transaction ID"
-        : `Hash mismatch: calculated ${calculatedHash.substring(0, 16)}... but transaction ID is ${transaction._id.substring(0, 16)}...`
-    });
-    
-    if (!hashMatch) {
-      errors.push(`Hash mismatch: expected ${calculatedHash}, got ${transaction._id}`);
-    }
-    
-    // Step 2: Verify transaction structure
-    updateStep("Verifying transaction structure");
-    const hasRequiredFields = transaction.type && transaction.nftId && transaction.quantity !== undefined;
-    checks.push({
-      name: "Transaction Structure",
-      passed: hasRequiredFields,
-      message: hasRequiredFields
-        ? "All required transaction fields are present"
-        : "Missing required transaction fields"
-    });
-    
-    if (!hasRequiredFields) {
-      errors.push("Transaction structure validation failed");
-    }
-
-    // Step 2.5: Verify signature if present
-    // Note: Older transactions may not have signatures, but all new transactions should
-    updateStep("Verifying transaction signature");
-    if (transaction.signature && transaction.signer) {
-      // Signature fields are present - verify they're not empty
-      const hasValidSignature = !!(transaction.signature.trim() && transaction.signer.trim());
-      checks.push({
-        name: "Transaction Signature",
-        passed: hasValidSignature,
-        message: hasValidSignature
-          ? `Transaction is signed by ${transaction.signer.substring(0, 10)}...`
-          : "Transaction signature fields are present but invalid"
-      });
-    } else {
-      // No signature - this is acceptable for older transactions
-      checks.push({
-        name: "Transaction Signature",
-        passed: true, // Not a failure, just informational
-        message: "Transaction does not have signature fields (may be an older transaction)"
-      });
-    }
-    
-    // Step 3: Verify Arweave data if available
-    if (transaction.arweaveTxId) {
-      updateStep("Fetching Arweave transaction");
-      try {
-        const arweaveData = await fetchArweaveTransaction(transaction.arweaveTxId);
-        
-        updateStep("Comparing Arweave data");
-        const fieldErrors = compareTransactionFields(transaction, arweaveData);
-        
-        // Check if Arweave transaction exists
-        checks.push({
-          name: "Arweave Transaction Found",
-          passed: true,
-          message: `Transaction found on Arweave at ${transaction.arweaveTxId.substring(0, 16)}...`
-        });
-        
-        // Check transactionId match
-        const transactionIdMatch = arweaveData.transactionId && arweaveData.transactionId === transaction._id;
-        checks.push({
-          name: "Arweave Transaction ID",
-          passed: transactionIdMatch,
-          message: transactionIdMatch
-            ? "Transaction ID in Arweave matches local transaction ID"
-            : `Transaction ID mismatch: expected ${transaction._id.substring(0, 16)}... but Arweave has ${arweaveData.transactionId?.substring(0, 16) || "missing"}...`
-        });
-        
-        // Check field matching
-        arweaveMatch = fieldErrors.length === 0;
-        checks.push({
-          name: "Arweave Data Integrity",
-          passed: arweaveMatch,
-          message: arweaveMatch
-            ? "All transaction fields match between local and Arweave storage"
-            : fieldErrors.slice(0, 2).join("; ")
-        });
-        
-        errors.push(...fieldErrors);
-        
-        if (arweaveData.transactionId && arweaveData.transactionId !== transaction._id) {
-          errors.push(`Arweave transactionId mismatch: expected ${transaction._id}, got ${arweaveData.transactionId}`);
-        }
-      } catch (arweaveError) {
-        const errorMsg = arweaveError instanceof Error ? arweaveError.message : String(arweaveError);
-        checks.push({
-          name: "Arweave Transaction Found",
-          passed: false,
-          message: `Failed to fetch from Arweave: ${errorMsg}`
-        });
-        errors.push(`Failed to verify Arweave data: ${errorMsg}`);
-      }
-    } else {
-      // If no Arweave transaction, that's okay - just verify hash
-      checks.push({
-        name: "Arweave Storage",
-        passed: true,
-        message: "Transaction not yet uploaded to Arweave (optional)"
-      });
-      arweaveMatch = true; // No Arweave to verify, so consider it "matched"
-    }
-    
-    return {
-      verified: hashMatch && errors.length === 0,
-      errors,
-      checks,
-      hashMatch,
-      arweaveMatch: transaction.arweaveTxId ? arweaveMatch : undefined,
-    };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    errors.push(`Verification failed: ${errorMsg}`);
-    checks.push({
-      name: "Verification Process",
-      passed: false,
-      message: errorMsg
-    });
-    return {
-      verified: false,
-      errors,
-      checks,
-      hashMatch: false,
-      arweaveMatch: false,
-    };
-  }
 }
 </file>
 
@@ -4271,681 +3882,6 @@ A: Our database maintains a copy of all transactions. Arweave serves as permanen
 **Built on cryptographic proof, not promises. Verify everything yourself.**
 </file>
 
-<file path="server/config/stores.ts">
-/**
- * Store Configuration
- * 
- * Defines the structure and management of multiple SljivaStore-compatible stores
- * that the Explorer can query.
- */
-
-export interface StoreConfig {
-  id: string;
-  name: string;
-  baseUrl: string;
-  publicKey?: string;
-  description?: string;
-  enabled?: boolean;
-  icon?: string; // URL or path to store icon
-}
-
-/**
- * Parse store configurations from environment variable.
- * 
- * Expected format: JSON array of store objects:
- * [
- *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
- *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
- * ]
- */
-function parseStoresFromEnv(): StoreConfig[] {
-  const storesEnv = process.env.EXPLORER_STORES;
-  
-  if (!storesEnv) {
-    return getDefaultStores();
-  }
-
-  try {
-    const parsed = JSON.parse(storesEnv);
-    
-    if (!Array.isArray(parsed)) {
-      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
-      return getDefaultStores();
-    }
-
-    const stores: StoreConfig[] = [];
-    for (const item of parsed) {
-      if (typeof item !== "object" || item === null) {
-        console.warn("[Stores Config] Skipping invalid store entry:", item);
-        continue;
-      }
-
-      if (!item.id || !item.name || !item.baseUrl) {
-        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
-        continue;
-      }
-
-      const baseUrl = String(item.baseUrl).replace(/\/$/, ""); // Remove trailing slash
-      
-      // Default icon for localhost stores if not specified
-      let icon = item.icon ? String(item.icon) : undefined;
-      if (!icon) {
-        try {
-          const url = new URL(baseUrl);
-          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
-            const frontendPort = process.env.FRONTEND_PORT || '5173';
-            icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
-          }
-        } catch {
-          // If URL parsing fails, skip default icon
-        }
-      }
-
-      stores.push({
-        id: String(item.id),
-        name: String(item.name),
-        baseUrl: baseUrl,
-        publicKey: item.publicKey ? String(item.publicKey) : undefined,
-        description: item.description ? String(item.description) : undefined,
-        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
-        icon: icon
-      });
-    }
-
-    if (stores.length === 0) {
-      console.warn("[Stores Config] No valid stores found, using defaults");
-      return getDefaultStores();
-    }
-
-    return stores;
-  } catch (error) {
-    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
-    return getDefaultStores();
-  }
-}
-
-/**
- * Get default store configuration for local development.
- */
-function getDefaultStores(): StoreConfig[] {
-  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
-  const frontendPort = process.env.FRONTEND_PORT || "5173";
-  return [
-    {
-      id: "local",
-      name: "Local SljivaStore",
-      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
-      description: "Default local development store",
-      enabled: true,
-      icon: `http://localhost:${frontendPort}/sljiva_icon.png` // Icon is served from frontend static files
-    }
-  ];
-}
-
-// Load and cache store configurations
-let cachedStores: StoreConfig[] | null = null;
-
-/**
- * Get all configured stores.
- * Stores are loaded once on first call and cached.
- */
-export function getStores(): StoreConfig[] {
-  if (cachedStores === null) {
-    cachedStores = parseStoresFromEnv();
-  }
-  return cachedStores.filter(store => store.enabled !== false);
-}
-
-/**
- * Get a store by its ID.
- * @param id Store identifier
- * @returns Store configuration or undefined if not found
- */
-export function getStoreById(id: string): StoreConfig | undefined {
-  const stores = getStores();
-  return stores.find(store => store.id === id);
-}
-
-/**
- * Initialize store configuration (call on server startup).
- * This will parse and validate stores, logging the results.
- */
-export function initializeStores(): void {
-  const stores = getStores();
-  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
-  stores.forEach(store => {
-    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
-  });
-}
-</file>
-
-<file path="src/lib/components/NetworkPage.svelte">
-<script lang="ts">
-  import { onMount } from "svelte";
-  import { fetchStores, fetchLastTransaction } from "../api";
-  import type { StoreInfo } from "../types";
-  import type { ExplorerTransaction } from "../types";
-
-  interface StoreWithStatus extends StoreInfo {
-    lastTransaction: ExplorerTransaction | null;
-    loading: boolean;
-    offline: boolean;
-    iconLoaded: boolean;
-    iconLoadError: boolean;
-  }
-
-  let stores: StoreWithStatus[] = [];
-  let loading = true;
-  let error: string | null = null;
-  let copiedTxId: string | null = null;
-
-  onMount(async () => {
-    await loadStores();
-  });
-
-  async function loadStores() {
-    loading = true;
-    error = null;
-
-    try {
-      const storeInfos = await fetchStores();
-
-      // Initialize stores with loading state
-      stores = storeInfos.map((store) => {
-        console.log(`[NetworkPage] Store loaded: ${store.name}, icon:`, store.icon, 'baseUrl:', store.baseUrl);
-        return {
-          ...store,
-          lastTransaction: null,
-          loading: true,
-          offline: false,
-          iconLoaded: false,
-          iconLoadError: false
-        };
-      });
-
-      // Fetch last transaction for each store in parallel
-      const promises = stores.map(async (store) => {
-        try {
-          const result = await fetchLastTransaction(store.baseUrl);
-          if (result && result.transaction) {
-            store.lastTransaction = result.transaction;
-            store.offline = false;
-          } else {
-            store.offline = true;
-          }
-        } catch (err) {
-          store.offline = true;
-        } finally {
-          store.loading = false;
-        }
-      });
-
-      await Promise.allSettled(promises);
-    } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to load stores";
-    } finally {
-      loading = false;
-    }
-  }
-
-  function formatAddress(address: string): string {
-    if (!address) return "";
-    if (address.length <= 16) return address;
-    return `${address.substring(0, 8)}…${address.substring(address.length - 8)}`;
-  }
-
-  function formatDate(dateString: string): string {
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleString();
-    } catch {
-      return dateString;
-    }
-  }
-
-  function getStoreFrontendUrl(baseUrl: string): string {
-    try {
-      const url = new URL(baseUrl);
-      const hostname = url.hostname;
-      const protocol = url.protocol;
-      
-      // For localhost, use port 5173 for frontend (standard Vite dev port)
-      if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${protocol}//${hostname}:5173`;
-      }
-      
-      // For production, remove /api/explorer path and use base domain
-      return baseUrl.replace(/\/api\/explorer.*$/, "");
-    } catch {
-      // Fallback: try regex extraction
-      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
-      if (match) {
-        const base = match[1];
-        if (base.includes('localhost')) {
-          return base.replace(/:(\d+)/, ':5173');
-        }
-        return base;
-      }
-      return baseUrl;
-    }
-  }
-
-  async function copyTransactionId(txId: string) {
-    try {
-      await navigator.clipboard.writeText(txId);
-      copiedTxId = txId;
-      // Reset after 2 seconds
-      setTimeout(() => {
-        copiedTxId = null;
-      }, 2000);
-    } catch (err) {
-      console.error("Failed to copy transaction ID:", err);
-    }
-  }
-</script>
-
-<div class="content-page">
-  <div class="content-header">
-    <h2>Our Network</h2>
-    <p class="content-description">
-      Explore all SljivaStore instances connected to this explorer. Each store operates independently
-      and maintains its own transaction history.
-    </p>
-  </div>
-
-  {#if loading}
-    <div class="loading-state">
-      <p>Loading stores...</p>
-    </div>
-  {:else if error}
-    <div class="error-state">
-      <p>Error: {error}</p>
-      <button class="retry-button" on:click={loadStores}>Retry</button>
-    </div>
-  {:else if stores.length === 0}
-    <div class="empty-state">
-      <p>No stores configured.</p>
-    </div>
-  {:else}
-    <div class="stores-grid">
-      {#each stores as store (store.id)}
-        <div class="store-card" class:offline={store.offline}>
-          <div class="store-header">
-            <div class="store-icon-wrapper">
-              {#if store.icon && store.icon.trim()}
-                <img 
-                  src={store.icon} 
-                  alt="{store.name} icon" 
-                  class="store-icon"
-                  class:hidden={!store.iconLoaded || store.iconLoadError}
-                  on:error={() => {
-                    console.error(`[NetworkPage] Failed to load icon for store "${store.name}": ${store.icon}`);
-                    store.iconLoadError = true;
-                    store.iconLoaded = false;
-                  }}
-                  on:load={() => {
-                    console.log(`[NetworkPage] Successfully loaded icon for store "${store.name}": ${store.icon}`);
-                    store.iconLoaded = true;
-                    store.iconLoadError = false;
-                  }}
-                />
-              {/if}
-              <div class="store-icon-placeholder" class:hidden={store.icon && store.icon.trim() && store.iconLoaded && !store.iconLoadError}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                  <line x1="3" y1="9" x2="21" y2="9"></line>
-                  <line x1="9" y1="21" x2="9" y2="9"></line>
-                </svg>
-              </div>
-            </div>
-            <div class="store-title-section">
-              <h3 class="store-name">{store.name}</h3>
-              {#if store.website}
-                <p class="store-website">{store.website}</p>
-              {/if}
-            </div>
-          </div>
-
-          <div class="store-status">
-            {#if store.loading}
-              <div class="status-loading">
-                <span class="status-dot loading"></span>
-                <span>Checking status...</span>
-              </div>
-            {:else if store.offline}
-              <div class="status-offline">
-                <span class="status-dot offline"></span>
-                <span>Store is currently offline</span>
-              </div>
-            {:else if store.lastTransaction}
-              <div class="last-transaction">
-                <div class="transaction-header">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polyline points="12 6 12 12 16 14"></polyline>
-                  </svg>
-                  <span class="transaction-label">Last Transaction</span>
-                </div>
-                <div class="transaction-id-wrapper">
-                  <div class="transaction-id">{formatAddress(store.lastTransaction._id)}</div>
-                  <button
-                    class="copy-button"
-                    class:copied={copiedTxId === store.lastTransaction._id}
-                    on:click={() => store.lastTransaction && copyTransactionId(store.lastTransaction._id)}
-                    title="Copy transaction ID"
-                  >
-                    {#if copiedTxId === store.lastTransaction._id}
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M20 6L9 17l-5-5"></path>
-                      </svg>
-                    {:else}
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                      </svg>
-                    {/if}
-                  </button>
-                </div>
-                <div class="transaction-time">{formatDate(store.lastTransaction.timestamp)}</div>
-              </div>
-            {:else}
-              <div class="status-offline">
-                <span class="status-dot offline"></span>
-                <span>No transactions yet</span>
-              </div>
-            {/if}
-          </div>
-
-          <div class="store-actions">
-            <a
-              href={getStoreFrontendUrl(store.baseUrl)}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="visit-button"
-            >
-              Visit
-            </a>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
-</div>
-
-<style>
-  /* Content page styles are now global in App.svelte */
-
-  .loading-state,
-  .error-state,
-  .empty-state {
-    text-align: center;
-    padding: 3rem 1rem;
-    color: var(--text-secondary);
-  }
-
-  .error-state {
-    color: var(--error, #ef4444);
-  }
-
-  .retry-button {
-    margin-top: 1rem;
-    padding: 0.75rem 1.5rem;
-    background: var(--accent);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity 0.2s ease;
-  }
-
-  .retry-button:hover {
-    opacity: 0.9;
-  }
-
-  .stores-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.5rem;
-  }
-
-  .store-card {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-  }
-
-  .store-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px var(--card-shadow);
-  }
-
-  .store-card.offline {
-    opacity: 0.7;
-  }
-
-  .store-header {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-  }
-
-  .store-icon-wrapper {
-    width: 48px;
-    height: 48px;
-    flex-shrink: 0;
-    position: relative;
-  }
-
-  .store-icon {
-    width: 100%;
-    height: 100%;
-    border-radius: 8px;
-    object-fit: cover;
-    border: 1px solid var(--card-border);
-  }
-
-  .store-icon-placeholder {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--card-border);
-    color: var(--text-secondary);
-  }
-
-  .store-icon-placeholder.hidden {
-    display: none;
-  }
-
-  .store-title-section {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .store-name {
-    margin: 0 0 0.25rem;
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    word-wrap: break-word;
-  }
-
-  .store-website {
-    margin: 0;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    word-wrap: break-word;
-  }
-
-  .store-status {
-    min-height: 60px;
-    display: flex;
-    align-items: flex-start;
-  }
-
-  .status-loading,
-  .status-offline {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-  }
-
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .status-dot.loading {
-    background: var(--text-secondary);
-    animation: pulse 1.5s ease-in-out infinite;
-  }
-
-  .status-dot.offline {
-    background: var(--error, #ef4444);
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.5;
-    }
-  }
-
-  .last-transaction {
-    width: 100%;
-  }
-
-  .transaction-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-
-  .transaction-header svg {
-    flex-shrink: 0;
-  }
-
-  .transaction-label {
-    flex: 1;
-  }
-
-  .transaction-id-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.25rem;
-  }
-
-  .transaction-id {
-    font-family: monospace;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    word-break: break-all;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .copy-button {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    border: 1px solid var(--card-border);
-    background: var(--card-bg);
-    border-radius: 6px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-  }
-
-  .copy-button:hover {
-    background: var(--card-border);
-    color: var(--text-primary);
-  }
-
-  .copy-button.copied {
-    background: #10b981;
-    border-color: #10b981;
-    color: white;
-  }
-
-  .copy-button svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .transaction-time {
-    font-size: 0.8125rem;
-    color: var(--text-secondary);
-  }
-
-  .store-actions {
-    margin-top: auto;
-    padding-top: 0.5rem;
-  }
-
-  .visit-button {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    text-align: center;
-    padding: 0.75rem 1rem;
-    background: var(--accent);
-    color: white;
-    text-decoration: none;
-    border-radius: 8px;
-    font-weight: 500;
-    transition: opacity 0.2s ease;
-    border: none;
-    cursor: pointer;
-  }
-
-  .visit-button:hover {
-    opacity: 0.9;
-  }
-
-  @media (max-width: 768px) {
-    .stores-grid {
-      grid-template-columns: 1fr;
-    }
-  }
-</style>
-</file>
-
 <file path="src/lib/components/SearchPanel.svelte">
 <script lang="ts">
   import type { StoreInfo } from "../types";
@@ -5100,6 +4036,282 @@ export function initializeStores(): void {
 </style>
 </file>
 
+<file path="src/lib/utils/hash.ts">
+/**
+ * Client-side hash calculation utilities
+ * Ported from backend/utils/hash.js for transaction verification
+ * 
+ * IMPORTANT: This must match backend/utils/hash.js exactly!
+ */
+
+/**
+ * Deterministic stringify function for consistent hashing.
+ * Handles object key sorting, Date serialization, null/undefined normalization
+ */
+function deterministicStringify(obj: any): string {
+  if (obj === null) {
+    return "null";
+  }
+  if (obj === undefined) {
+    return "undefined";
+  }
+  
+  // Handle primitives
+  if (typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  
+  // Handle Date objects
+  if (obj instanceof Date) {
+    return JSON.stringify(obj.toISOString());
+  }
+  
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    const items = obj.map(item => deterministicStringify(item));
+    return `[${items.join(",")}]`;
+  }
+  
+  // Handle objects - sort keys for consistency
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    const value = obj[key];
+    // Skip undefined values to maintain consistency
+    if (value === undefined) {
+      return null;
+    }
+    const serializedValue = deterministicStringify(value);
+    return `${JSON.stringify(key)}:${serializedValue}`;
+  }).filter((pair): pair is string => pair !== null);
+  
+  return `{${pairs.join(",")}}`;
+}
+
+/**
+ * Hash an object deterministically using SHA-256
+ */
+async function hashObject(obj: any): Promise<string> {
+  const serialized = deterministicStringify(obj);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(serialized);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Create a hashable representation of a Transaction for hashing.
+ * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
+ * 
+ * Handles all transaction types:
+ * - MINT
+ * - LISTING_CREATE
+ * - LISTING_CANCEL
+ * - NFT_BUY
+ * - GIFT_CREATE
+ * - GIFT_CLAIM
+ * - GIFT_REFUSE
+ * - GIFT_CANCEL
+ * 
+ * Excludes _id and arweaveTxId (since _id will be the hash itself).
+ * Includes signer and signature fields if present.
+ */
+function hashableTransaction(transaction: any): any {
+  // Exclude technical metadata that should not be in hash
+  const { _id, arweaveTxId, previous_arweave_tx, ...rest } = transaction;
+  const type = String(rest.type || "");
+  
+  // Helper to normalize empty strings to null for optional fields
+  const normalizeOptional = (value: any): string | null => {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+    return String(value);
+  };
+  
+  // Base fields present in all transaction types
+  const base: any = {
+    type,
+    transaction_number: Number(rest.transaction_number || 0),
+    timestamp: rest.timestamp instanceof Date 
+      ? rest.timestamp 
+      : new Date(rest.timestamp || Date.now()),
+  };
+  
+  // Type-specific field handling - MUST MATCH BACKEND EXACTLY
+  switch (type) {
+    case "MINT": {
+      const minter = String(rest.buyer || rest.seller || rest.creator || "").toLowerCase();
+      base.nftId = String(rest.nftId || "");
+      base.quantity = Number(rest.quantity || 0);
+      base.buyer = minter;
+      base.seller = minter;
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "LISTING_CREATE": {
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
+      base.nftId = String(rest.nftId || "");
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.price = String(rest.price || "");
+      base.currency = String(rest.currency || "");
+      if (rest.sellerWallets && typeof rest.sellerWallets === 'object') {
+        // Sort wallet keys for deterministic hashing
+        base.sellerWallets = Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
+          acc[key] = String(rest.sellerWallets[key]);
+          return acc;
+        }, {} as any);
+      }
+      base.bundleSale = rest.bundleSale === true || rest.bundleSale === "true";
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "LISTING_CANCEL": {
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
+      base.seller = String(rest.seller || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "NFT_BUY": {
+      // Normalize empty strings to null for optional fields (explorer API converts null to "")
+      base.listingId = normalizeOptional(rest.listingId);
+      base.reservationId = normalizeOptional(rest.reservationId);
+      base.nftId = String(rest.nftId || "");
+      base.buyer = String(rest.buyer || "").toLowerCase();
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      base.chainTx = normalizeOptional(rest.chainTx);
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CREATE": {
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CLAIM": {
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_REFUSE": {
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT_CANCEL": {
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      // Include signature fields
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    // Legacy types for backward compatibility
+    case "TRANSACTION": {
+      // Legacy TRANSACTION type - map to NFT_BUY structure
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
+      base.reservationId = normalizeOptional(rest.reservationId);
+      base.nftId = String(rest.nftId || "");
+      base.buyer = String(rest.buyer || "").toLowerCase();
+      base.seller = String(rest.seller || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    case "GIFT": {
+      // Legacy GIFT type - map to GIFT_CLAIM structure
+      base.nftId = String(rest.nftId || "");
+      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
+      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
+      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
+      base.quantity = Number(rest.quantity || 0);
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
+      base.currency = String(rest.currency || "ETH");
+      base.amount = String(rest.amount || "0");
+      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
+      if (rest.signature) base.signature = String(rest.signature);
+      break;
+    }
+    
+    default:
+      throw new Error(`Unknown transaction type: ${type}`);
+  }
+  
+  return base;
+}
+
+/**
+ * Calculate the expected hash for a transaction
+ */
+export async function calculateTransactionHash(transaction: any): Promise<string> {
+  const hashable = hashableTransaction(transaction);
+  return await hashObject(hashable);
+}
+</file>
+
 <file path="README.md">
 # Explorer
 
@@ -5193,6 +4405,163 @@ The Vite dev server automatically proxies:
 - Run `./orchestrate "Your task"` for AI-assisted development
 - Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks
 - For Docker deployment see `docs/running.md`
+</file>
+
+<file path="server/config/stores.ts">
+/**
+ * Store Configuration
+ * 
+ * Defines the structure and management of multiple SljivaStore-compatible stores
+ * that the Explorer can query.
+ */
+
+export interface StoreConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  publicKey?: string;
+  description?: string;
+  enabled?: boolean;
+  icon?: string; // URL or path to store icon
+}
+
+/**
+ * Parse store configurations from environment variable.
+ * 
+ * Expected format: JSON array of store objects:
+ * [
+ *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
+ *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
+ * ]
+ */
+function parseStoresFromEnv(): StoreConfig[] {
+  const storesEnv = process.env.EXPLORER_STORES;
+  
+  if (!storesEnv) {
+    return getDefaultStores();
+  }
+
+  try {
+    const parsed = JSON.parse(storesEnv);
+    
+    if (!Array.isArray(parsed)) {
+      console.warn("[Stores Config] EXPLORER_STORES is not an array, using defaults");
+      return getDefaultStores();
+    }
+
+    const stores: StoreConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) {
+        console.warn("[Stores Config] Skipping invalid store entry:", item);
+        continue;
+      }
+
+      if (!item.id || !item.name || !item.baseUrl) {
+        console.warn("[Stores Config] Store missing required fields (id, name, baseUrl):", item);
+        continue;
+      }
+
+      const baseUrl = String(item.baseUrl).replace(/\/$/, ""); // Remove trailing slash
+      
+      // Default icon if not specified - construct from baseUrl
+      let icon = item.icon ? String(item.icon) : undefined;
+      if (!icon) {
+        try {
+          const url = new URL(baseUrl);
+          const protocol = url.protocol || 'https:';
+          const hostname = url.hostname;
+          
+          if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            // Default icon for localhost
+            const frontendPort = process.env.FRONTEND_PORT || '5173';
+            icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+          } else {
+            // Default icon for production stores: use the store's domain
+            // Remove /api/explorer from baseUrl to get the frontend URL
+            const frontendBase = baseUrl.replace(/\/api\/explorer.*$/, '');
+            icon = `${frontendBase}/sljiva_icon.png`;
+          }
+        } catch {
+          // If URL parsing fails, skip default icon
+        }
+      }
+
+      stores.push({
+        id: String(item.id),
+        name: String(item.name),
+        baseUrl: baseUrl,
+        publicKey: item.publicKey ? String(item.publicKey) : undefined,
+        description: item.description ? String(item.description) : undefined,
+        enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
+        icon: icon
+      });
+    }
+
+    if (stores.length === 0) {
+      console.warn("[Stores Config] No valid stores found, using defaults");
+      return getDefaultStores();
+    }
+
+    return stores;
+  } catch (error) {
+    console.error("[Stores Config] Failed to parse EXPLORER_STORES:", error);
+    return getDefaultStores();
+  }
+}
+
+/**
+ * Get default store configuration for local development.
+ */
+function getDefaultStores(): StoreConfig[] {
+  const mainStorePort = process.env.MAIN_STORE_PORT || "3000";
+  const frontendPort = process.env.FRONTEND_PORT || "5173";
+  return [
+    {
+      id: "local",
+      name: "Local SljivaStore",
+      baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
+      description: "Default local development store",
+      enabled: true,
+      icon: `http://localhost:${frontendPort}/sljiva_icon.png` // Icon is served from frontend static files
+    }
+  ];
+}
+
+// Load and cache store configurations
+let cachedStores: StoreConfig[] | null = null;
+
+/**
+ * Get all configured stores.
+ * Stores are loaded once on first call and cached.
+ */
+export function getStores(): StoreConfig[] {
+  if (cachedStores === null) {
+    cachedStores = parseStoresFromEnv();
+  }
+  return cachedStores.filter(store => store.enabled !== false);
+}
+
+/**
+ * Get a store by its ID.
+ * @param id Store identifier
+ * @returns Store configuration or undefined if not found
+ */
+export function getStoreById(id: string): StoreConfig | undefined {
+  const stores = getStores();
+  return stores.find(store => store.id === id);
+}
+
+/**
+ * Initialize store configuration (call on server startup).
+ * This will parse and validate stores, logging the results.
+ */
+export function initializeStores(): void {
+  const stores = getStores();
+  console.log(`[Stores Config] Loaded ${stores.length} store(s):`);
+  stores.forEach(store => {
+    console.log(`  - ${store.id}: ${store.name} (${store.baseUrl})`);
+  });
+}
 </file>
 
 <file path="src/lib/components/VerificationPage.svelte">
@@ -5709,6 +5078,1060 @@ Transaction #1  → Previous: null (first transaction)`}</pre>
 </style>
 </file>
 
+<file path="src/lib/utils/verification.ts">
+/**
+ * Transaction verification utilities
+ */
+
+import type { ExplorerTransaction } from "../types";
+import { calculateTransactionHash } from "./hash";
+
+export interface VerificationCheck {
+  name: string;
+  passed: boolean;
+  message?: string;
+}
+
+export interface VerificationResult {
+  verified: boolean;
+  errors: string[];
+  checks: VerificationCheck[];
+  hashMatch?: boolean;
+  arweaveMatch?: boolean;
+}
+
+/**
+ * Fetch transaction data from Arweave
+ * Arweave stores transaction data, and we need to fetch it from the gateway
+ */
+export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any> {
+  const gateway = "https://arweave.net";
+  
+  try {
+    // First, get transaction info to get the data format
+    const txResponse = await fetch(`${gateway}/tx/${arweaveTxId}`);
+    if (!txResponse.ok) {
+      const errorText = await txResponse.text().catch(() => '');
+      throw new Error(`Failed to fetch Arweave transaction metadata: ${txResponse.status}${errorText ? ` - ${errorText.substring(0, 100)}` : ''}`);
+    }
+    
+    // Parse transaction info - read as text first so we can provide better errors
+    const txText = await txResponse.text();
+    
+    // Check if Arweave is saying the transaction is pending
+    const trimmedTxText = txText.trim();
+    if (trimmedTxText.toLowerCase() === "pending") {
+      throw new Error(
+        `Arweave transaction ${arweaveTxId} is still pending. ` +
+        `Arweave transactions typically confirm within 1-2 minutes. ` +
+        `Please wait a moment and try verifying again.`
+      );
+    }
+    
+    let txInfo: any;
+    try {
+      txInfo = JSON.parse(txText);
+    } catch (jsonError) {
+      const contentType = txResponse.headers.get('content-type') || 'unknown';
+      throw new Error(
+        `Failed to parse Arweave transaction metadata as JSON. ` +
+        `Content-Type: ${contentType}. ` +
+        `Response preview: ${txText.substring(0, 300)}. ` +
+        `Error: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`
+      );
+    }
+    
+    // Fetch the actual data
+    const dataResponse = await fetch(`${gateway}/${arweaveTxId}`);
+    if (!dataResponse.ok) {
+      const errorText = await dataResponse.text().catch(() => '');
+      throw new Error(`Failed to fetch Arweave transaction data: ${dataResponse.status}${errorText ? ` - ${errorText.substring(0, 100)}` : ''}`);
+    }
+    
+    // Get the response text once
+    const dataText = await dataResponse.text();
+    
+    // Check if response is empty
+    if (!dataText || dataText.trim().length === 0) {
+      throw new Error('Arweave transaction data is empty');
+    }
+    
+    // Check if Arweave is saying the transaction data is pending
+    const trimmedDataText = dataText.trim();
+    if (trimmedDataText.toLowerCase() === "pending") {
+      throw new Error(
+        `Arweave transaction data for ${arweaveTxId} is still pending. ` +
+        `Arweave transactions typically confirm within 1-2 minutes. ` +
+        `Please wait a moment and try verifying again.`
+      );
+    }
+    
+    // Check content type
+    const dataContentType = dataResponse.headers.get('content-type') || '';
+    
+    // Trim whitespace before parsing
+    const trimmed = trimmedDataText;
+    
+    // Try to parse as JSON first
+    try {
+      return JSON.parse(trimmed);
+    } catch (jsonError) {
+      // If JSON parsing failed, try base64 decode
+      try {
+        // Try to decode as base64
+        const decoded = atob(trimmed);
+        return JSON.parse(decoded);
+      } catch (base64Error) {
+        // Both failed - provide helpful error
+        const preview = trimmed.substring(0, 200);
+        throw new Error(
+          `Failed to parse Arweave transaction data. ` +
+          `Content-Type: ${dataContentType}. ` +
+          `Response length: ${trimmed.length} chars. ` +
+          `Preview: ${preview}... ` +
+          `JSON error: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}. ` +
+          `Base64 error: ${base64Error instanceof Error ? base64Error.message : String(base64Error)}`
+        );
+      }
+    }
+  } catch (error) {
+    // Re-throw with more context
+    if (error instanceof Error && error.message.includes('Arweave')) {
+      throw error;
+    }
+    throw new Error(`Error fetching Arweave transaction ${arweaveTxId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Normalize a value for comparison (handles dates, strings, numbers)
+ */
+function normalizeValue(value: any): any {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string") {
+    // Normalize empty strings to null for chainTx
+    return value.trim().toLowerCase() || null;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  // Handle date strings - convert to ISO string for comparison
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return new Date(value).toISOString();
+  }
+  return String(value).toLowerCase();
+}
+
+/**
+ * Normalize a transaction for comparison
+ * Maps buyer/seller to giver/receiver for GIFT transactions
+ */
+function normalizeTransactionForComparison(tx: any): any {
+  const normalized = { ...tx };
+  
+  // For GIFT transactions: explorer API maps giver->seller, receiver->buyer
+  // But Arweave stores giver/receiver, so normalize explorer format to match Arweave
+  if (tx.type === "GIFT") {
+    // Always map seller -> giver and buyer -> receiver if giver/receiver don't exist
+    if (tx.giver === undefined || tx.giver === null) {
+      normalized.giver = tx.seller || "";
+    }
+    if (tx.receiver === undefined || tx.receiver === null) {
+      normalized.receiver = tx.buyer || "";
+    }
+  }
+  
+  return normalized;
+}
+
+/**
+ * Compare transaction fields between local and Arweave data
+ */
+function compareTransactionFields(local: any, arweave: any): string[] {
+  const errors: string[] = [];
+  
+  // Normalize local transaction to match Arweave format
+  const normalizedLocal = normalizeTransactionForComparison(local);
+  
+  // Fields to compare (excluding transactionId and previous_arweave_tx which are metadata)
+  const fieldsToCompare = [
+    "type",
+    "transaction_number",
+    "nftId",
+    "quantity",
+    "chainTx",
+    "currency",
+    "amount",
+    "timestamp",
+    "signer",    // Added for signature verification
+    "signature", // Added for signature verification
+  ];
+  
+  // Add type-specific fields
+  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
+    fieldsToCompare.push("giver", "receiver");
+    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
+  } else if (normalizedLocal.type === "MINT") {
+    fieldsToCompare.push("buyer", "seller");
+  } else if (normalizedLocal.type === "LISTING_CREATE") {
+    fieldsToCompare.push("seller");
+    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
+    if (normalizedLocal.price) fieldsToCompare.push("price");
+    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
+    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
+  } else {
+    fieldsToCompare.push("buyer", "seller");
+    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
+    if (normalizedLocal.reservationId) fieldsToCompare.push("reservationId");
+  }
+  
+  for (const field of fieldsToCompare) {
+    const localValue = normalizeValue(normalizedLocal[field]);
+    const arweaveValue = normalizeValue(arweave[field]);
+    
+    // Special handling for timestamp - compare ISO strings
+    if (field === "timestamp") {
+      const localDate = normalizedLocal.timestamp instanceof Date 
+        ? normalizedLocal.timestamp.toISOString() 
+        : new Date(normalizedLocal.timestamp).toISOString();
+      const arweaveDate = arweave.timestamp instanceof Date
+        ? arweave.timestamp.toISOString()
+        : new Date(arweave.timestamp).toISOString();
+      
+      if (localDate !== arweaveDate) {
+        errors.push(`Field ${field} mismatch: local=${localDate}, arweave=${arweaveDate}`);
+      }
+      continue;
+    }
+    
+    // Special handling for sellerWallets (object comparison)
+    if (field === "sellerWallets") {
+      const localWallets = JSON.stringify(Object.keys(localValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(localValue[key]);
+        return acc;
+      }, {}));
+      const arweaveWallets = JSON.stringify(Object.keys(arweaveValue || {}).sort().reduce((acc: any, key: string) => {
+        acc[key] = String(arweaveValue[key]);
+        return acc;
+      }, {}));
+      if (localWallets !== arweaveWallets) {
+        errors.push(`Field ${field} mismatch: local=${localWallets}, arweave=${arweaveWallets}`);
+      }
+      continue;
+    }
+    
+    if (localValue !== arweaveValue) {
+      errors.push(`Field ${field} mismatch: local=${localValue}, arweave=${arweaveValue}`);
+    }
+  }
+  
+  return errors;
+}
+
+/**
+ * Verify a transaction
+ * 1. Calculates hash and compares with transaction ID
+ * 2. If Arweave transaction exists, fetches and compares all fields
+ */
+export async function verifyTransaction(
+  transaction: ExplorerTransaction,
+  updateStep: (step: string) => void
+): Promise<VerificationResult> {
+  const errors: string[] = [];
+  const checks: VerificationCheck[] = [];
+  let hashMatch = false;
+  let arweaveMatch = false;
+  
+  try {
+    // Step 1: Calculate hash
+    updateStep("Calculating hash");
+    const calculatedHash = await calculateTransactionHash(transaction);
+    hashMatch = calculatedHash === transaction._id;
+    
+    checks.push({
+      name: "Hash Calculation",
+      passed: hashMatch,
+      message: hashMatch 
+        ? "Transaction hash matches the stored transaction ID"
+        : `Hash mismatch: calculated ${calculatedHash.substring(0, 16)}... but transaction ID is ${transaction._id.substring(0, 16)}...`
+    });
+    
+    if (!hashMatch) {
+      errors.push(`Hash mismatch: expected ${calculatedHash}, got ${transaction._id}`);
+    }
+    
+    // Step 2: Verify transaction structure
+    updateStep("Verifying transaction structure");
+    const hasRequiredFields = transaction.type && transaction.nftId && transaction.quantity !== undefined;
+    checks.push({
+      name: "Transaction Structure",
+      passed: hasRequiredFields,
+      message: hasRequiredFields
+        ? "All required transaction fields are present"
+        : "Missing required transaction fields"
+    });
+    
+    if (!hasRequiredFields) {
+      errors.push("Transaction structure validation failed");
+    }
+
+    // Step 2.5: Verify signature if present
+    // Note: Older transactions may not have signatures, but all new transactions should
+    updateStep("Verifying transaction signature");
+    if (transaction.signature && transaction.signer) {
+      // Signature fields are present - verify they're not empty
+      const hasValidSignature = !!(transaction.signature.trim() && transaction.signer.trim());
+      checks.push({
+        name: "Transaction Signature",
+        passed: hasValidSignature,
+        message: hasValidSignature
+          ? `Transaction is signed by ${transaction.signer.substring(0, 10)}...`
+          : "Transaction signature fields are present but invalid"
+      });
+    } else {
+      // No signature - this is acceptable for older transactions
+      checks.push({
+        name: "Transaction Signature",
+        passed: true, // Not a failure, just informational
+        message: "Transaction does not have signature fields (may be an older transaction)"
+      });
+    }
+    
+    // Step 3: Verify Arweave data if available
+    if (transaction.arweaveTxId) {
+      updateStep("Fetching Arweave transaction");
+      try {
+        const arweaveData = await fetchArweaveTransaction(transaction.arweaveTxId);
+        
+        updateStep("Comparing Arweave data");
+        const fieldErrors = compareTransactionFields(transaction, arweaveData);
+        
+        // Check if Arweave transaction exists
+        checks.push({
+          name: "Arweave Transaction Found",
+          passed: true,
+          message: `Transaction found on Arweave at ${transaction.arweaveTxId.substring(0, 16)}...`
+        });
+        
+        // Check transactionId match
+        const transactionIdMatch = arweaveData.transactionId && arweaveData.transactionId === transaction._id;
+        checks.push({
+          name: "Arweave Transaction ID",
+          passed: transactionIdMatch,
+          message: transactionIdMatch
+            ? "Transaction ID in Arweave matches local transaction ID"
+            : `Transaction ID mismatch: expected ${transaction._id.substring(0, 16)}... but Arweave has ${arweaveData.transactionId?.substring(0, 16) || "missing"}...`
+        });
+        
+        // Check field matching
+        arweaveMatch = fieldErrors.length === 0;
+        checks.push({
+          name: "Arweave Data Integrity",
+          passed: arweaveMatch,
+          message: arweaveMatch
+            ? "All transaction fields match between local and Arweave storage"
+            : fieldErrors.slice(0, 2).join("; ")
+        });
+        
+        errors.push(...fieldErrors);
+        
+        if (arweaveData.transactionId && arweaveData.transactionId !== transaction._id) {
+          errors.push(`Arweave transactionId mismatch: expected ${transaction._id}, got ${arweaveData.transactionId}`);
+        }
+      } catch (arweaveError) {
+        const errorMsg = arweaveError instanceof Error ? arweaveError.message : String(arweaveError);
+        
+        // Check if the error is because the transaction is still pending
+        const isPending = errorMsg.toLowerCase().includes("pending");
+        
+        if (isPending) {
+          // Pending is not a failure - just informational
+          checks.push({
+            name: "Arweave Transaction Found",
+            passed: true, // Not a failure, just pending
+            message: `Transaction is still pending on Arweave. This is normal - Arweave transactions typically confirm within 1-2 minutes. The transaction will be available for verification once confirmed.`
+          });
+          // Don't add this to errors - pending is acceptable
+        } else {
+          // Actual error - mark as failed
+          checks.push({
+            name: "Arweave Transaction Found",
+            passed: false,
+            message: `Failed to fetch from Arweave: ${errorMsg}`
+          });
+          errors.push(`Failed to verify Arweave data: ${errorMsg}`);
+        }
+      }
+    } else {
+      // If no Arweave transaction, that's okay - just verify hash
+      checks.push({
+        name: "Arweave Storage",
+        passed: true,
+        message: "Transaction not yet uploaded to Arweave (optional)"
+      });
+      arweaveMatch = true; // No Arweave to verify, so consider it "matched"
+    }
+    
+    return {
+      verified: hashMatch && errors.length === 0,
+      errors,
+      checks,
+      hashMatch,
+      arweaveMatch: transaction.arweaveTxId ? arweaveMatch : undefined,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    errors.push(`Verification failed: ${errorMsg}`);
+    checks.push({
+      name: "Verification Process",
+      passed: false,
+      message: errorMsg
+    });
+    return {
+      verified: false,
+      errors,
+      checks,
+      hashMatch: false,
+      arweaveMatch: false,
+    };
+  }
+}
+</file>
+
+<file path="src/lib/components/NetworkPage.svelte">
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { fetchStores, fetchLastTransaction } from "../api";
+  import type { StoreInfo } from "../types";
+  import type { ExplorerTransaction } from "../types";
+
+  interface StoreWithStatus extends StoreInfo {
+    lastTransaction: ExplorerTransaction | null;
+    loading: boolean;
+    offline: boolean;
+    iconLoaded: boolean;
+    iconLoadError: boolean;
+  }
+
+  let stores: StoreWithStatus[] = [];
+  let loading = true;
+  let error: string | null = null;
+  let copiedTxId: string | null = null;
+
+  onMount(async () => {
+    await loadStores();
+  });
+
+  async function loadStores() {
+    loading = true;
+    error = null;
+
+    try {
+      const storeInfos = await fetchStores();
+
+      // Initialize stores with loading state
+      stores = storeInfos.map((store) => {
+        return {
+          ...store,
+          lastTransaction: null,
+          loading: true,
+          offline: false,
+          iconLoaded: false,
+          iconLoadError: false
+        };
+      });
+
+      // Fetch last transaction for each store in parallel
+      const promises = stores.map(async (store) => {
+        try {
+          const result = await fetchLastTransaction(store.baseUrl);
+          if (result) {
+            // Store is online (we got a response)
+            store.offline = false;
+            if (result.transaction) {
+              store.lastTransaction = result.transaction;
+            }
+            // If result.transaction is null but result exists, it means "no transactions yet" (404)
+            // Store is still online, just empty
+          } else {
+            // result is null = network error, timeout, or CORS issue = store is offline
+            store.offline = true;
+          }
+        } catch (err) {
+          // Exception = store is offline
+          store.offline = true;
+        } finally {
+          store.loading = false;
+        }
+      });
+
+      await Promise.allSettled(promises);
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to load stores";
+    } finally {
+      loading = false;
+    }
+  }
+
+  function formatAddress(address: string): string {
+    if (!address) return "";
+    if (address.length <= 16) return address;
+    return `${address.substring(0, 8)}…${address.substring(address.length - 8)}`;
+  }
+
+  function formatDate(dateString: string): string {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleString();
+    } catch {
+      return dateString;
+    }
+  }
+
+  function getStoreFrontendUrl(baseUrl: string): string {
+    try {
+      const url = new URL(baseUrl);
+      const hostname = url.hostname;
+      const protocol = url.protocol;
+      
+      // For localhost, use port 5173 for frontend (standard Vite dev port)
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return `${protocol}//${hostname}:5173`;
+      }
+      
+      // For production, remove /api/explorer path and use base domain
+      return baseUrl.replace(/\/api\/explorer.*$/, "");
+    } catch {
+      // Fallback: try regex extraction
+      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
+      if (match) {
+        const base = match[1];
+        if (base.includes('localhost')) {
+          return base.replace(/:(\d+)/, ':5173');
+        }
+        return base;
+      }
+      return baseUrl;
+    }
+  }
+
+  async function copyTransactionId(txId: string) {
+    try {
+      await navigator.clipboard.writeText(txId);
+      copiedTxId = txId;
+      // Reset after 2 seconds
+      setTimeout(() => {
+        copiedTxId = null;
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy transaction ID:", err);
+    }
+  }
+</script>
+
+<div class="content-page">
+  <div class="content-header">
+    <h2>Our Network</h2>
+    <p class="content-description">
+      Explore all SljivaStore instances connected to this explorer. Each store operates independently
+      and maintains its own transaction history.
+    </p>
+  </div>
+
+  {#if loading}
+    <div class="loading-state">
+      <p>Loading stores...</p>
+    </div>
+  {:else if error}
+    <div class="error-state">
+      <p>Error: {error}</p>
+      <button class="retry-button" on:click={loadStores}>Retry</button>
+    </div>
+  {:else if stores.length === 0}
+    <div class="empty-state">
+      <p>No stores configured.</p>
+    </div>
+  {:else}
+    <div class="stores-grid">
+      {#each stores as store (store.id)}
+        <div class="store-card" class:offline={store.offline}>
+          <div class="store-header">
+            <div class="store-icon-wrapper">
+              {#if store.icon && store.icon.trim()}
+                <img 
+                  src={store.icon} 
+                  alt="{store.name} icon" 
+                  class="store-icon"
+                  class:hidden={!store.iconLoaded || store.iconLoadError}
+                  on:error={() => {
+                    store.iconLoadError = true;
+                    store.iconLoaded = false;
+                  }}
+                  on:load={() => {
+                    store.iconLoaded = true;
+                    store.iconLoadError = false;
+                  }}
+                />
+              {/if}
+              <div class="store-icon-placeholder" class:hidden={store.icon && store.icon.trim() && store.iconLoaded && !store.iconLoadError}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="3" y1="9" x2="21" y2="9"></line>
+                  <line x1="9" y1="21" x2="9" y2="9"></line>
+                </svg>
+              </div>
+            </div>
+            <div class="store-title-section">
+              <h3 class="store-name">{store.name}</h3>
+              {#if store.website}
+                <p class="store-website">{store.website}</p>
+              {/if}
+            </div>
+          </div>
+
+          <div class="store-status">
+            {#if store.loading}
+              <div class="status-loading">
+                <span class="status-dot loading"></span>
+                <span>Checking status...</span>
+              </div>
+            {:else if store.offline}
+              <div class="status-offline">
+                <span class="status-dot offline"></span>
+                <span>Store is currently offline</span>
+              </div>
+            {:else if store.lastTransaction}
+              <div class="last-transaction">
+                <div class="transaction-header">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                  <span class="transaction-label">Last Transaction</span>
+                </div>
+                <div class="transaction-id-wrapper">
+                  <div class="transaction-id">{formatAddress(store.lastTransaction._id)}</div>
+                  <button
+                    class="copy-button"
+                    class:copied={copiedTxId === store.lastTransaction._id}
+                    on:click={() => store.lastTransaction && copyTransactionId(store.lastTransaction._id)}
+                    title="Copy transaction ID"
+                  >
+                    {#if copiedTxId === store.lastTransaction._id}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 6L9 17l-5-5"></path>
+                      </svg>
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                    {/if}
+                  </button>
+                </div>
+                <div class="transaction-time">{formatDate(store.lastTransaction.timestamp)}</div>
+              </div>
+            {:else}
+              <div class="status-offline">
+                <span class="status-dot offline"></span>
+                <span>No transactions yet</span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="store-actions">
+            <a
+              href={getStoreFrontendUrl(store.baseUrl)}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="visit-button"
+            >
+              Visit
+            </a>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  /* Content page styles are now global in App.svelte */
+
+  .loading-state,
+  .error-state,
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+  }
+
+  .error-state {
+    color: var(--error, #ef4444);
+  }
+
+  .retry-button {
+    margin-top: 1rem;
+    padding: 0.75rem 1.5rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+  }
+
+  .retry-button:hover {
+    opacity: 0.9;
+  }
+
+  .stores-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .store-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .store-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--card-shadow);
+  }
+
+  .store-card.offline {
+    opacity: 0.7;
+  }
+
+  .store-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .store-icon-wrapper {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .store-icon {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+    border: 1px solid var(--card-border);
+  }
+
+  .store-icon-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--card-border);
+    color: var(--text-secondary);
+  }
+
+  .store-icon-placeholder.hidden {
+    display: none;
+  }
+
+  .store-title-section {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .store-name {
+    margin: 0 0 0.25rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-wrap: break-word;
+  }
+
+  .store-website {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    word-wrap: break-word;
+  }
+
+  .store-status {
+    min-height: 60px;
+    display: flex;
+    align-items: flex-start;
+  }
+
+  .status-loading,
+  .status-offline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.loading {
+    background: var(--text-secondary);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .status-dot.offline {
+    background: var(--error, #ef4444);
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .last-transaction {
+    width: 100%;
+  }
+
+  .transaction-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .transaction-header svg {
+    flex-shrink: 0;
+  }
+
+  .transaction-label {
+    flex: 1;
+  }
+
+  .transaction-id-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .transaction-id {
+    font-family: monospace;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .copy-button {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+
+  .copy-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  .copy-button.copied {
+    background: #10b981;
+    border-color: #10b981;
+    color: white;
+  }
+
+  .copy-button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .transaction-time {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+  }
+
+  .store-actions {
+    margin-top: auto;
+    padding-top: 0.5rem;
+  }
+
+  .visit-button {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    padding: 0.75rem 1rem;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: opacity 0.2s ease;
+    border: none;
+    cursor: pointer;
+  }
+
+  .visit-button:hover {
+    opacity: 0.9;
+  }
+
+  @media (max-width: 768px) {
+    .stores-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</file>
+
+<file path="src/lib/types.ts">
+export type SearchMode = "part" | "transaction";
+
+export interface StoreInfo {
+  id: string;
+  name: string;
+  baseUrl: string;
+  website?: string;
+  icon?: string | null;
+}
+
+export interface ExplorerPart {
+  _id: string;
+  part_no: number;
+  parent_hash: string;
+  owner: string;
+  listing: string | null;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerNFT {
+  _id: string;
+  name: string;
+  description: string;
+  creator: string;
+  imageurl?: string;
+}
+
+export interface Pagination {
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface PartialTransaction {
+  part: string;
+  txId?: string;
+  transaction?: string;
+  from: string;
+  to: string;
+  nftId: string;
+  chainTx: string;
+  currency: string;
+  amount: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerTransaction {
+  _id: string;
+  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
+  transaction_number?: number;
+  listingId?: string;
+  reservationId?: string;
+  buyer?: string;
+  seller?: string;
+  nftId?: string;
+  quantity?: number;
+  chainTx?: string;
+  currency?: string;
+  amount?: string;
+  arweaveTxId?: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+  // Signature fields (for verification)
+  signer?: string;
+  signature?: string;
+  // Gift-specific fields
+  giver?: string;
+  receiver?: string;
+  giftId?: string;
+  // Listing-specific fields
+  price?: string;
+  sellerWallets?: Record<string, string>;
+  bundleSale?: boolean;
+}
+
+export type ExplorerResult =
+  | {
+      kind: "part";
+      part: ExplorerPart;
+      nft: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination;
+    }
+  | {
+      kind: "transaction";
+      transaction: ExplorerTransaction;
+      parts?: ExplorerPart[];
+      nft?: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination | null;
+    };
+</file>
+
 <file path="server/routes/explorer.ts">
 /**
  * Explorer API Routes
@@ -5761,15 +6184,20 @@ router.get("/icon/:storeId", async (req, res) => {
 
     // Fetch icon from store
     try {
-      console.log(`[Explorer API] Fetching icon for store ${storeId} from: ${store.icon}`);
       const iconResponse = await fetch(store.icon, {
         signal: AbortSignal.timeout(5000), // 5 second timeout
       });
-
-      console.log(`[Explorer API] Icon fetch response status: ${iconResponse.status} for ${store.icon}`);
-      if (!iconResponse.ok) {
+      // Handle success codes: 200 (OK), 304 (Not Modified)
+      if (!iconResponse.ok && iconResponse.status !== 304) {
         const errorText = await iconResponse.text().catch(() => 'Unable to read error response');
         throw new Error(`Failed to fetch icon: ${iconResponse.status} - ${errorText}`);
+      }
+      
+      // For 304, use cached version if available
+      if (iconResponse.status === 304 && cached) {
+        res.setHeader("Content-Type", cached.contentType);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.send(cached.data);
       }
 
       const contentType = iconResponse.headers.get("content-type") || "image/png";
@@ -5794,7 +6222,6 @@ router.get("/icon/:storeId", async (req, res) => {
       
       // If we have a stale cache, use it
       if (cached) {
-        console.log(`[Explorer API] Using stale cached icon for store ${storeId}`);
         res.setHeader("Content-Type", cached.contentType);
         res.setHeader("Cache-Control", "public, max-age=86400");
         return res.send(cached.data);
@@ -6721,425 +7148,6 @@ router.get("/partial-transactions/chain/:chainTx", async (req, res) => {
 });
 
 export default router;
-</file>
-
-<file path="src/lib/api.ts">
-import type {
-  ExplorerResult,
-  ExplorerTransaction,
-  ExplorerPart,
-  ExplorerNFT,
-  PartialTransaction,
-  SearchMode,
-  StoreInfo
-} from "./types";
-
-const DEFAULT_BASE = "/api/explorer";
-const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
-const NFT_BASE = "/api/nfts";
-
-/**
- * Fetch list of available stores.
- */
-export async function fetchStores(): Promise<StoreInfo[]> {
-  const response = await fetch(`${API_BASE}/stores`, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch stores: ${response.status}`);
-  }
-
-  return (await response.json()) as StoreInfo[];
-}
-
-/**
- * Fetch last transaction for a specific store.
- */
-export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
-  transaction: ExplorerTransaction;
-  error?: string;
-} | null> {
-  try {
-    const response = await fetch(`${storeBaseUrl}/last-transaction`, {
-      headers: {
-        Accept: "application/json"
-      },
-      signal: AbortSignal.timeout(5000) // 5 second timeout
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    return {
-      transaction: data.transaction
-    };
-  } catch (err) {
-    return null; // Store is offline or error occurred
-  }
-}
-
-interface PartResponse {
-  part: ExplorerPart;
-  nft?: ExplorerNFT | null;
-  partialTransactions: PartialTransaction[];
-  pagination?: {
-    total: number;
-    skip: number;
-    limit: number;
-  };
-}
-
-interface TransactionResponse {
-  transaction: ExplorerTransaction;
-  parts?: ExplorerPart[];
-  nft?: ExplorerNFT | null;
-  partialTransactions: PartialTransaction[];
-  pagination?: {
-    total: number;
-    skip: number;
-    limit: number;
-  } | null;
-}
-
-async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
-  const url = `${API_BASE}${path}${query}`;
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!response.ok) {
-    const message = await parseError(response);
-    throw new Error(message);
-  }
-
-  return (await response.json()) as T;
-}
-
-async function parseError(response: Response): Promise<string> {
-  try {
-    const data = await response.json();
-    if (typeof data?.error === "string") {
-      return data.error;
-    }
-  } catch {
-    // ignore
-  }
-  return `Request failed with status ${response.status}`;
-}
-
-export async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
-  if (!nftId) return null;
-  const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  try {
-    const data = (await response.json()) as ExplorerNFT;
-    return {
-      ...data,
-      partialTransactions: data.partialTransactions ?? [],
-      pagination: data.pagination ?? null
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function requestSafe<T>(path: string, params?: Record<string, string>): Promise<{ success: true; data: T } | { success: false; error: string }> {
-  try {
-    const data = await request<T>(path, params);
-    return { success: true, data };
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : "Request failed" };
-  }
-}
-
-export async function searchExplorer(
-  mode: SearchMode,
-  query: string,
-  options: { page?: number; pageSize?: number; storeId?: string } = {}
-): Promise<ExplorerResult> {
-  const sanitized = query.trim();
-  if (!sanitized) {
-    throw new Error("Please enter a value to search.");
-  }
-
-  const page = Math.max(0, options.page ?? 0);
-  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
-  const paginationParams: Record<string, string> = {
-    skip: String(page * pageSize),
-    limit: String(pageSize),
-  };
-
-  if (options.storeId) {
-    paginationParams.storeId = options.storeId;
-  }
-
-  switch (mode) {
-    case "part": {
-      const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
-      // NFT is now included in the response from the backend
-      return {
-        kind: "part",
-        part: data.part,
-        nft: data.nft ?? null,
-        partialTransactions: data.partialTransactions,
-        pagination: data.pagination ?? {
-          total: data.partialTransactions.length,
-          skip: page * pageSize,
-          limit: pageSize
-        }
-      };
-    }
-    case "transaction": {
-      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
-      const path = isObjectId
-        ? `/transactions/id/${encodeURIComponent(sanitized)}`
-        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
-      const data = await request<TransactionResponse>(path, paginationParams);
-      return {
-        kind: "transaction",
-        transaction: data.transaction,
-        partialTransactions: data.partialTransactions ?? [],
-        pagination: null
-      };
-    }
-    default: {
-      const exhaustive: never = mode;
-      throw new Error(`Unsupported search mode: ${exhaustive}`);
-    }
-  }
-}
-
-/**
- * Unified search that automatically tries part hash, chain hash, or transaction ID.
- * Tries different endpoints in sequence until one succeeds.
- */
-export async function unifiedSearch(
-  query: string,
-  options: { page?: number; pageSize?: number; storeId?: string } = {}
-): Promise<ExplorerResult> {
-  const sanitized = query.trim();
-  if (!sanitized) {
-    throw new Error("Please enter a value to search.");
-  }
-
-  const page = Math.max(0, options.page ?? 0);
-  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
-  const paginationParams: Record<string, string> = {
-    skip: String(page * pageSize),
-    limit: String(pageSize),
-  };
-
-  if (options.storeId) {
-    paginationParams.storeId = options.storeId;
-  }
-
-  const errors: string[] = [];
-
-  // Detect input characteristics
-  const has0xPrefix = sanitized.toLowerCase().startsWith("0x");
-  const without0x = has0xPrefix ? sanitized.slice(2) : sanitized;
-  const with0x = has0xPrefix ? sanitized : `0x${sanitized}`;
-
-  // Build search candidates - try all variations to maximize chances of finding the result
-  const searchCandidates: Array<{ type: string; path: string; desc: string }> = [];
-  const seenPaths = new Set<string>();
-
-  // Helper to add candidate without duplicates
-  const addCandidate = (type: string, path: string, desc: string) => {
-    if (!seenPaths.has(path)) {
-      seenPaths.add(path);
-      searchCandidates.push({ type, path, desc });
-    }
-  };
-
-  // 1. Try part hash (original input)
-  addCandidate("part-hash", `/parts/${encodeURIComponent(sanitized)}`, "part hash");
-
-  // 2. Chain hash variations - try with and without 0x prefix
-  addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(sanitized)}`, "chain hash (as-is)");
-  
-  if (has0xPrefix) {
-    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(without0x)}`, "chain hash (without 0x)");
-  }
-  
-  if (!has0xPrefix && /^[0-9a-fA-F]+$/i.test(sanitized)) {
-    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(with0x)}`, "chain hash (with 0x)");
-  }
-
-  // 3. Transaction ID - always try
-  addCandidate("transaction-id", `/transactions/id/${encodeURIComponent(sanitized)}`, "transaction ID");
-
-  // Try all candidates
-  for (const candidate of searchCandidates) {
-    try {
-      if (candidate.type === "part-hash") {
-        const result = await requestSafe<PartResponse>(candidate.path, paginationParams);
-        if (result.success) {
-          return {
-            kind: "part",
-            part: result.data.part,
-            nft: result.data.nft ?? null,
-            partialTransactions: result.data.partialTransactions,
-            pagination: result.data.pagination ?? {
-              total: result.data.partialTransactions.length,
-              skip: page * pageSize,
-              limit: pageSize
-            }
-          };
-        }
-        const errorMsg = result.error || "Unknown error";
-        errors.push(`${candidate.desc}: ${errorMsg}`);
-      } else {
-        // transaction searches
-        const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
-        if (result.success) {
-          // Use NFT metadata from server response, or fetch if not provided
-          let nft = result.data.nft ?? null;
-          if (!nft && result.data.transaction.nftId) {
-            nft = await fetchNftMetadata(result.data.transaction.nftId);
-          }
-
-          return {
-            kind: "transaction",
-            transaction: result.data.transaction,
-            parts: result.data.parts ?? [],
-            nft: nft,
-            partialTransactions: result.data.partialTransactions ?? [],
-            pagination: result.data.pagination ?? null
-          };
-        }
-        const errorMsg = result.error || "Unknown error";
-        errors.push(`${candidate.desc}: ${errorMsg}`);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
-      errors.push(`${candidate.desc}: ${errorMsg}`);
-    }
-  }
-
-  // All searches failed - provide detailed error message
-  const triedTypes = [...new Set(searchCandidates.map(c => c.desc))].join(", ");
-  const allErrors = errors.length > 0 ? errors.join("; ") : "No specific errors available";
-  throw new Error(
-    `No results found for "${sanitized}". ` +
-    `Tried searching as: ${triedTypes}. ` +
-    `Errors: ${allErrors}`
-  );
-}
-</file>
-
-<file path="src/lib/types.ts">
-export type SearchMode = "part" | "transaction";
-
-export interface StoreInfo {
-  id: string;
-  name: string;
-  baseUrl: string;
-  website?: string;
-  icon?: string | null;
-}
-
-export interface ExplorerPart {
-  _id: string;
-  part_no: number;
-  parent_hash: string;
-  owner: string;
-  listing: string | null;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerNFT {
-  _id: string;
-  name: string;
-  description: string;
-  creator: string;
-  imageurl?: string;
-}
-
-export interface Pagination {
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface PartialTransaction {
-  part: string;
-  txId?: string;
-  transaction?: string;
-  from: string;
-  to: string;
-  nftId: string;
-  chainTx: string;
-  currency: string;
-  amount: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerTransaction {
-  _id: string;
-  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
-  transaction_number?: number;
-  listingId?: string;
-  reservationId?: string;
-  buyer?: string;
-  seller?: string;
-  nftId?: string;
-  quantity?: number;
-  chainTx?: string;
-  currency?: string;
-  amount?: string;
-  arweaveTxId?: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-  // Signature fields (for verification)
-  signer?: string;
-  signature?: string;
-  // Gift-specific fields
-  giver?: string;
-  receiver?: string;
-  giftId?: string;
-  // Listing-specific fields
-  price?: string;
-  sellerWallets?: Record<string, string>;
-  bundleSale?: boolean;
-}
-
-export type ExplorerResult =
-  | {
-      kind: "part";
-      part: ExplorerPart;
-      nft: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination;
-    }
-  | {
-      kind: "transaction";
-      transaction: ExplorerTransaction;
-      parts?: ExplorerPart[];
-      nft?: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination | null;
-    };
 </file>
 
 <file path="src/lib/components/ResultPanel.svelte">
@@ -8392,6 +8400,367 @@ export type ExplorerResult =
     color: var(--text-muted);
   }
 </style>
+</file>
+
+<file path="src/lib/api.ts">
+import type {
+  ExplorerResult,
+  ExplorerTransaction,
+  ExplorerPart,
+  ExplorerNFT,
+  PartialTransaction,
+  SearchMode,
+  StoreInfo
+} from "./types";
+
+const DEFAULT_BASE = "/api/explorer";
+const API_BASE = (import.meta.env.VITE_EXPLORER_API_BASE as string | undefined) ?? DEFAULT_BASE;
+const NFT_BASE = "/api/nfts";
+
+/**
+ * Fetch list of available stores.
+ */
+export async function fetchStores(): Promise<StoreInfo[]> {
+  const response = await fetch(`${API_BASE}/stores`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch stores: ${response.status}`);
+  }
+
+  return (await response.json()) as StoreInfo[];
+}
+
+/**
+ * Fetch last transaction for a specific store.
+ */
+export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
+  transaction: ExplorerTransaction | null;
+  error?: string;
+} | null> {
+  try {
+    const response = await fetch(`${storeBaseUrl}/last-transaction`, {
+      headers: {
+        Accept: "application/json"
+      },
+      signal: AbortSignal.timeout(10000) // 10 second timeout (increased from 5)
+    });
+
+    // Handle 304 (Not Modified) first - this means store is online and browser has cached data
+    // For 304, the response body might not be accessible to JavaScript, but the store is definitely online
+    // The 304 status code itself is proof that the server responded, so the store is online
+    if (response.status === 304) {
+      // Try to read body if available (some servers send body with 304), but don't fail if unavailable
+      try {
+        // Read response as text first to avoid "body already consumed" errors
+        const text = await response.text();
+        if (text && text.trim().length > 0) {
+          try {
+            const data = JSON.parse(text);
+            return { transaction: data.transaction || null };
+          } catch {
+            // JSON parse failed, but store is still online
+          }
+        }
+      } catch (readError) {
+        // Body might not be accessible for 304 - that's fine, store is still online
+      }
+      // Store is online (304 proves the server responded), return success even without transaction data
+      return { transaction: null, error: "Using cached data (304)" };
+    }
+
+    // Handle 200 (OK) - normal response
+    if (response.ok) {
+      try {
+        const data = await response.json();
+        return {
+          transaction: data.transaction || null
+        };
+      } catch (parseError) {
+        // If parsing fails, store is still online (we got a response)
+        return { transaction: null, error: "Failed to parse response" };
+      }
+    }
+
+    // 404 means no transactions yet (store is online but empty)
+    if (response.status === 404) {
+      return { transaction: null, error: "No transactions found" };
+    }
+
+    // Log other errors for debugging
+    const errorText = await response.text().catch(() => `Status ${response.status}`);
+    console.warn(`[fetchLastTransaction] Failed to fetch from ${storeBaseUrl}/last-transaction:`, response.status, errorText);
+    return null; // Store might be offline (network/server error)
+  } catch (err) {
+    // Network errors, timeouts, CORS errors indicate the store is offline
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[fetchLastTransaction] Error fetching from ${storeBaseUrl}/last-transaction:`, errorMsg);
+    return null; // Store is offline or error occurred
+  }
+}
+
+interface PartResponse {
+  part: ExplorerPart;
+  nft?: ExplorerNFT | null;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  };
+}
+
+interface TransactionResponse {
+  transaction: ExplorerTransaction;
+  parts?: ExplorerPart[];
+  nft?: ExplorerNFT | null;
+  partialTransactions: PartialTransaction[];
+  pagination?: {
+    total: number;
+    skip: number;
+    limit: number;
+  } | null;
+}
+
+async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const query = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const url = `${API_BASE}${path}${query}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    const message = await parseError(response);
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function parseError(response: Response): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === "string") {
+      return data.error;
+    }
+  } catch {
+    // ignore
+  }
+  return `Request failed with status ${response.status}`;
+}
+
+export async function fetchNftMetadata(nftId: string): Promise<ExplorerNFT | null> {
+  if (!nftId) return null;
+  const response = await fetch(`${NFT_BASE}/${encodeURIComponent(nftId)}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  try {
+    const data = (await response.json()) as ExplorerNFT;
+    return {
+      ...data,
+      partialTransactions: data.partialTransactions ?? [],
+      pagination: data.pagination ?? null
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function requestSafe<T>(path: string, params?: Record<string, string>): Promise<{ success: true; data: T } | { success: false; error: string }> {
+  try {
+    const data = await request<T>(path, params);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Request failed" };
+  }
+}
+
+export async function searchExplorer(
+  mode: SearchMode,
+  query: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
+
+  switch (mode) {
+    case "part": {
+      const data = await request<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
+      // NFT is now included in the response from the backend
+      return {
+        kind: "part",
+        part: data.part,
+        nft: data.nft ?? null,
+        partialTransactions: data.partialTransactions,
+        pagination: data.pagination ?? {
+          total: data.partialTransactions.length,
+          skip: page * pageSize,
+          limit: pageSize
+        }
+      };
+    }
+    case "transaction": {
+      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
+      const path = isObjectId
+        ? `/transactions/id/${encodeURIComponent(sanitized)}`
+        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
+      const data = await request<TransactionResponse>(path, paginationParams);
+      return {
+        kind: "transaction",
+        transaction: data.transaction,
+        partialTransactions: data.partialTransactions ?? [],
+        pagination: null
+      };
+    }
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`Unsupported search mode: ${exhaustive}`);
+    }
+  }
+}
+
+/**
+ * Unified search that automatically tries part hash, chain hash, or transaction ID.
+ * Tries different endpoints in sequence until one succeeds.
+ */
+export async function unifiedSearch(
+  query: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<ExplorerResult> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const paginationParams: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+
+  if (options.storeId) {
+    paginationParams.storeId = options.storeId;
+  }
+
+  const errors: string[] = [];
+
+  // Detect input characteristics
+  const has0xPrefix = sanitized.toLowerCase().startsWith("0x");
+  const without0x = has0xPrefix ? sanitized.slice(2) : sanitized;
+  const with0x = has0xPrefix ? sanitized : `0x${sanitized}`;
+
+  // Build search candidates - try all variations to maximize chances of finding the result
+  const searchCandidates: Array<{ type: string; path: string; desc: string }> = [];
+  const seenPaths = new Set<string>();
+
+  // Helper to add candidate without duplicates
+  const addCandidate = (type: string, path: string, desc: string) => {
+    if (!seenPaths.has(path)) {
+      seenPaths.add(path);
+      searchCandidates.push({ type, path, desc });
+    }
+  };
+
+  // 1. Try part hash (original input)
+  addCandidate("part-hash", `/parts/${encodeURIComponent(sanitized)}`, "part hash");
+
+  // 2. Chain hash variations - try with and without 0x prefix
+  addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(sanitized)}`, "chain hash (as-is)");
+  
+  if (has0xPrefix) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(without0x)}`, "chain hash (without 0x)");
+  }
+  
+  if (!has0xPrefix && /^[0-9a-fA-F]+$/i.test(sanitized)) {
+    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(with0x)}`, "chain hash (with 0x)");
+  }
+
+  // 3. Transaction ID - always try
+  addCandidate("transaction-id", `/transactions/id/${encodeURIComponent(sanitized)}`, "transaction ID");
+
+  // Try all candidates
+  for (const candidate of searchCandidates) {
+    try {
+      if (candidate.type === "part-hash") {
+        const result = await requestSafe<PartResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          return {
+            kind: "part",
+            part: result.data.part,
+            nft: result.data.nft ?? null,
+            partialTransactions: result.data.partialTransactions,
+            pagination: result.data.pagination ?? {
+              total: result.data.partialTransactions.length,
+              skip: page * pageSize,
+              limit: pageSize
+            }
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      } else {
+        // transaction searches
+        const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
+        if (result.success) {
+          // Use NFT metadata from server response, or fetch if not provided
+          let nft = result.data.nft ?? null;
+          if (!nft && result.data.transaction.nftId) {
+            nft = await fetchNftMetadata(result.data.transaction.nftId);
+          }
+
+          return {
+            kind: "transaction",
+            transaction: result.data.transaction,
+            parts: result.data.parts ?? [],
+            nft: nft,
+            partialTransactions: result.data.partialTransactions ?? [],
+            pagination: result.data.pagination ?? null
+          };
+        }
+        const errorMsg = result.error || "Unknown error";
+        errors.push(`${candidate.desc}: ${errorMsg}`);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      errors.push(`${candidate.desc}: ${errorMsg}`);
+    }
+  }
+
+  // All searches failed - provide detailed error message
+  const triedTypes = [...new Set(searchCandidates.map(c => c.desc))].join(", ");
+  const allErrors = errors.length > 0 ? errors.join("; ") : "No specific errors available";
+  throw new Error(
+    `No results found for "${sanitized}". ` +
+    `Tried searching as: ${triedTypes}. ` +
+    `Errors: ${allErrors}`
+  );
+}
 </file>
 
 </files>

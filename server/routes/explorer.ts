@@ -49,12 +49,9 @@ router.get("/icon/:storeId", async (req, res) => {
 
     // Fetch icon from store
     try {
-      console.log(`[Explorer API] Fetching icon for store ${storeId} from: ${store.icon}`);
       const iconResponse = await fetch(store.icon, {
         signal: AbortSignal.timeout(5000), // 5 second timeout
       });
-
-      console.log(`[Explorer API] Icon fetch response status: ${iconResponse.status} for ${store.icon}`);
       // Handle success codes: 200 (OK), 304 (Not Modified)
       if (!iconResponse.ok && iconResponse.status !== 304) {
         const errorText = await iconResponse.text().catch(() => 'Unable to read error response');
@@ -90,7 +87,6 @@ router.get("/icon/:storeId", async (req, res) => {
       
       // If we have a stale cache, use it
       if (cached) {
-        console.log(`[Explorer API] Using stale cached icon for store ${storeId}`);
         res.setHeader("Content-Type", cached.contentType);
         res.setHeader("Cache-Control", "public, max-age=86400");
         return res.send(cached.data);
