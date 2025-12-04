@@ -169,16 +169,18 @@
           {#each partials as partial}
             <tr>
               <td>
-                {@const partLink = getPartLinkForPartial(partial)}
-                <a
-                  href={partLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="part-link"
-                  title={partLink}
-                >
-                  {formatAddress(partial.part)}
-                </a>
+                {#each [partial] as p}
+                  {@const partLink = getPartLinkForPartial(p)}
+                  <a
+                    href={partLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="part-link"
+                    title={partLink}
+                  >
+                    {formatAddress(p.part)}
+                  </a>
+                {/each}
               </td>
               <td>{formatAddress(partial.from)}</td>
               <td>{formatAddress(partial.to)}</td>
