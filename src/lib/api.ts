@@ -37,12 +37,15 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
   error?: string;
 } | null> {
   try {
+    console.log(`[fetchLastTransaction] Fetching from ${storeBaseUrl}/last-transaction`);
     const response = await fetch(`${storeBaseUrl}/last-transaction`, {
       headers: {
         Accept: "application/json"
       },
       signal: AbortSignal.timeout(10000) // 10 second timeout (increased from 5)
     });
+
+    console.log(`[fetchLastTransaction] Response status: ${response.status}, ok: ${response.ok} for ${storeBaseUrl}/last-transaction`);
 
     // Handle success codes: 200 (OK), 304 (Not Modified)
     // Both indicate store is online - 304 means cached data, but some servers send body anyway
