@@ -44,22 +44,31 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
       signal: AbortSignal.timeout(10000) // 10 second timeout (increased from 5)
     });
 
-    if (!response.ok) {
-      // 404 means no transactions yet (store is online but empty)
-      // Return a result object to indicate store is online, just no transactions
-      if (response.status === 404) {
-        return { transaction: null, error: "No transactions found" };
+    // Handle success codes: 200 (OK), 304 (Not Modified)
+    if (response.ok || response.status === 304) {
+      // For 304, try to parse JSON, but if body is empty, that's okay - browser has cached version
+      if (response.status === 304) {
+        // 304 means "Not Modified" - browser should have cached data
+        // Return null to indicate we should use cached data or fetch failed
+        // But the store is online (we got a response)
+        return { transaction: null, error: "Using cached data (304)" };
       }
-      // Log other errors for debugging
-      const errorText = await response.text().catch(() => `Status ${response.status}`);
-      console.warn(`[fetchLastTransaction] Failed to fetch from ${storeBaseUrl}/last-transaction:`, response.status, errorText);
-      return null; // Store might be offline (network/server error)
+      
+      const data = await response.json();
+      return {
+        transaction: data.transaction
+      };
     }
 
-    const data = await response.json();
-    return {
-      transaction: data.transaction
-    };
+    // 404 means no transactions yet (store is online but empty)
+    if (response.status === 404) {
+      return { transaction: null, error: "No transactions found" };
+    }
+
+    // Log other errors for debugging
+    const errorText = await response.text().catch(() => `Status ${response.status}`);
+    console.warn(`[fetchLastTransaction] Failed to fetch from ${storeBaseUrl}/last-transaction:`, response.status, errorText);
+    return null; // Store might be offline (network/server error)
   } catch (err) {
     // Network errors, timeouts, CORS errors indicate the store is offline
     const errorMsg = err instanceof Error ? err.message : String(err);

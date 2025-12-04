@@ -55,9 +55,17 @@ router.get("/icon/:storeId", async (req, res) => {
       });
 
       console.log(`[Explorer API] Icon fetch response status: ${iconResponse.status} for ${store.icon}`);
-      if (!iconResponse.ok) {
+      // Handle success codes: 200 (OK), 304 (Not Modified)
+      if (!iconResponse.ok && iconResponse.status !== 304) {
         const errorText = await iconResponse.text().catch(() => 'Unable to read error response');
         throw new Error(`Failed to fetch icon: ${iconResponse.status} - ${errorText}`);
+      }
+      
+      // For 304, use cached version if available
+      if (iconResponse.status === 304 && cached) {
+        res.setHeader("Content-Type", cached.contentType);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.send(cached.data);
       }
 
       const contentType = iconResponse.headers.get("content-type") || "image/png";
