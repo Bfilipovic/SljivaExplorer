@@ -154,10 +154,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       <a href="#network" class="navbar__link" class:active={activeSection === 'network'} on:click={(e) => handleNavClick(e, 'network')}>
         Our network
       </a>
-      <a href="#terms" class="navbar__link" class:active={activeSection === 'terms'} on:click={(e) => {
-        e.preventDefault();
-        openTosModal();
-      }}>
+      <a href="#terms" class="navbar__link" class:active={activeSection === 'terms'} on:click={(e) => handleNavClick(e, 'terms')}>
         Terms of service
       </a>
       <a href="#verification" class="navbar__link" class:active={activeSection === 'verification'} on:click={(e) => handleNavClick(e, 'verification')}>
@@ -230,6 +227,17 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     {/if}
   {:else if activeSection === 'network'}
     <NetworkPage />
+  {:else if activeSection === 'terms'}
+    <div class="content-page">
+      <div class="content-header">
+        <h2>Terms of Service</h2>
+      </div>
+      <div class="content-body">
+        {#each tosText.split('\n') as line}
+          <p>{line}</p>
+        {/each}
+      </div>
+    </div>
   {:else if activeSection === 'verification'}
     <div class="content-page">
       <div class="content-header">

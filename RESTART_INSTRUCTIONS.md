@@ -20,7 +20,7 @@ Or press `Ctrl+C` in the terminal where `npm run dev` is running.
 Your `.env` file is now configured for local development:
 
 ```
-EXPLORER_STORES='[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]'
+EXPLORER_STORES='[{"id":"local","name":"Local Nomin","baseUrl":"http://localhost:3000/api/explorer"}]'
 MAIN_STORE_PORT=3000
 ```
 
@@ -44,7 +44,7 @@ This will:
    ```bash
    curl http://localhost:4175/api/explorer/stores
    ```
-   Should return: `[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]`
+   Should return: `[{"id":"local","name":"Local Nomin","baseUrl":"http://localhost:3000/api/explorer"}]`
 
 2. Try searching in the browser at http://localhost:4175
 

@@ -2,12 +2,12 @@
 
 ## Development (with main project)
 
-1. Start the SljivaStore backend:
+1. Start the Nomin backend:
    ```bash
    cd ../backend
    npm run dev
    ```
-2. Start the main SljivaStore frontend (optional, for parity testing):
+2. Start the main Nomin frontend (optional, for parity testing):
    ```bash
    cd ../frontend
    npm run dev
@@ -31,8 +31,8 @@ npm run preview
 Build and run the Explorer container:
 
 ```bash
-docker build -t sljivastore-explorer .
-docker run -it --rm -p 4175:4175 sljivastore-explorer
+docker build -t nominstore-explorer .
+docker run -it --rm -p 4175:4175 nominstore-explorer
 ```
 
 The app will be available at `http://localhost:4175`.

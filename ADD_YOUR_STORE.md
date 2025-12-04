@@ -20,7 +20,7 @@ If you're running locally, it might be:
 
 ```bash
 cd explorer
-./scripts/add-store.sh main "My SljivaStore" http://YOUR-DOMAIN/api/explorer
+./scripts/add-store.sh main "My Nomin" http://YOUR-DOMAIN/api/explorer
 ```
 
 Replace `YOUR-DOMAIN` with your actual domain (e.g., `kodak.beogradfilm.com`).
@@ -40,7 +40,7 @@ nano .env.production
 EXPLORER_STORES='[
   {
     "id": "main",
-    "name": "My SljivaStore",
+    "name": "My Nomin",
     "baseUrl": "http://kodak.beogradfilm.com/api/explorer"
   }
 ]'

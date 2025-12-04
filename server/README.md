@@ -18,12 +18,12 @@ NODE_ENV=development
 MAIN_STORE_PORT=3000
 
 # Multi-store configuration (JSON array)
-EXPLORER_STORES='[{"id":"main","name":"Main SljivaStore","baseUrl":"https://store1.example.com/api/explorer"},{"id":"test","name":"Test Store","baseUrl":"https://teststore.example.com/api/explorer"}]'
+EXPLORER_STORES='[{"id":"main","name":"Main Nomin","baseUrl":"https://store1.example.com/api/explorer"},{"id":"test","name":"Test Store","baseUrl":"https://teststore.example.com/api/explorer"}]'
 ```
 
 ### Store Configuration
 
-The `EXPLORER_STORES` environment variable defines multiple SljivaStore-compatible stores that the Explorer can query. If not provided or invalid, it defaults to a single local store pointing to `http://localhost:3000/api/explorer`.
+The `EXPLORER_STORES` environment variable defines multiple Nomin-compatible stores that the Explorer can query. If not provided or invalid, it defaults to a single local store pointing to `http://localhost:3000/api/explorer`.
 
 **Store Configuration Fields:**
 - `id` (required) - Unique identifier for the store
@@ -38,7 +38,7 @@ The `EXPLORER_STORES` environment variable defines multiple SljivaStore-compatib
 [
   {
     "id": "main",
-    "name": "Main SljivaStore",
+    "name": "Main Nomin",
     "baseUrl": "https://store1.example.com/api/explorer",
     "description": "Primary production store"
   },

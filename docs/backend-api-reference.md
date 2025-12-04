@@ -1,7 +1,7 @@
 # Backend API Reference for Explorer
 
 The Explorer consumes the read-only Explorer endpoints exposed by the
-SljivaStore backend. All URLs shown below are relative to the main backend
+Nomin backend. All URLs shown below are relative to the main backend
 origin (e.g. `https://store.example.com/api`).
 
 ## Explorer Endpoints

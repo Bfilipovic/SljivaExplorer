@@ -4,7 +4,7 @@
 
 - Explorer is a standalone SvelteKit/Vite application (to be scaffolded).
 - Targets read-only browsing; no wallet signing.
-- Shared component patterns with SljivaStore where possible (Tailwind CSS, layout).
+- Shared component patterns with Nomin where possible (Tailwind CSS, layout).
 
 ## Data Flow
 

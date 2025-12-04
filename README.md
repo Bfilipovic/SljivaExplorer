@@ -1,6 +1,6 @@
 # Explorer
 
-Standalone Explorer application for searching parts and transactions across the SljivaStore network.
+Standalone Explorer application for searching parts and transactions across the Nomin network.
 
 ## Structure
 

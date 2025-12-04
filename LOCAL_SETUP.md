@@ -13,7 +13,7 @@ The Explorer is now configured to use your local backend:
 The `.env` file in the explorer directory is set to:
 
 ```bash
-EXPLORER_STORES='[{"id":"local","name":"Local SljivaStore","baseUrl":"http://localhost:3000/api/explorer"}]'
+EXPLORER_STORES='[{"id":"local","name":"Local Nomin","baseUrl":"http://localhost:3000/api/explorer"}]'
 MAIN_STORE_PORT=3000
 PORT=4175
 ```
@@ -87,7 +87,7 @@ If you change the `.env` file, you need to restart the Explorer:
    Look for store configuration messages when the explorer starts. You should see:
    ```
    [Stores Config] Loaded 1 store(s):
-     - local: Local SljivaStore (http://localhost:3000/api/explorer)
+     - local: Local Nomin (http://localhost:3000/api/explorer)
    ```
 
 ### Backend not accessible

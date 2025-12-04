@@ -132,7 +132,7 @@
   <div class="content-header">
     <h2>Our Network</h2>
     <p class="content-description">
-      Explore all SljivaStore instances connected to this explorer. Each store operates independently
+      Explore all Nomin instances connected to this explorer. Each store operates independently
       and maintains its own transaction history.
     </p>
   </div>

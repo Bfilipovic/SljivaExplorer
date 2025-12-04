@@ -1,7 +1,7 @@
 /**
  * Store Client Utilities
  * 
- * Handles HTTP requests to individual SljivaStore backends with timeout and error handling.
+ * Handles HTTP requests to individual Nomin backends with timeout and error handling.
  */
 
 import type { StoreConfig } from "../config/stores.js";

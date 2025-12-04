@@ -1,7 +1,7 @@
 /**
  * Store Configuration
  * 
- * Defines the structure and management of multiple SljivaStore-compatible stores
+ * Defines the structure and management of multiple Nomin-compatible stores
  * that the Explorer can query.
  */
 
@@ -20,7 +20,7 @@ export interface StoreConfig {
  * 
  * Expected format: JSON array of store objects:
  * [
- *   { "id": "main", "name": "Main SljivaStore", "baseUrl": "https://store1.example.com/api/explorer" },
+ *   { "id": "main", "name": "Main Nomin", "baseUrl": "https://store1.example.com/api/explorer" },
  *   { "id": "test", "name": "Test Store", "baseUrl": "https://teststore.example.com/api/explorer" }
  * ]
  */
@@ -64,12 +64,12 @@ function parseStoresFromEnv(): StoreConfig[] {
           if (hostname === 'localhost' || hostname === '127.0.0.1') {
             // Default icon for localhost
             const frontendPort = process.env.FRONTEND_PORT || '5173';
-            icon = `http://localhost:${frontendPort}/sljiva_icon.png`;
+            icon = `http://localhost:${frontendPort}/nomin_icon.png`;
           } else {
             // Default icon for production stores: use the store's domain
             // Remove /api/explorer from baseUrl to get the frontend URL
             const frontendBase = baseUrl.replace(/\/api\/explorer.*$/, '');
-            icon = `${frontendBase}/sljiva_icon.png`;
+            icon = `${frontendBase}/nomin_icon.png`;
           }
         } catch {
           // If URL parsing fails, skip default icon
@@ -108,11 +108,11 @@ function getDefaultStores(): StoreConfig[] {
   return [
     {
       id: "local",
-      name: "Local SljivaStore",
+      name: "Local Nomin",
       baseUrl: `http://localhost:${mainStorePort}/api/explorer`,
       description: "Default local development store",
       enabled: true,
-      icon: `http://localhost:${frontendPort}/sljiva_icon.png` // Icon is served from frontend static files
+      icon: `http://localhost:${frontendPort}/nomin_icon.png` // Icon is served from frontend static files
     }
   ];
 }

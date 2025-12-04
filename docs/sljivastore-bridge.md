@@ -1,4 +1,4 @@
-# SljivaStore ↔ Explorer Bridge
+# Nomin ↔ Explorer Bridge
 
 ## Data Model Reference
 

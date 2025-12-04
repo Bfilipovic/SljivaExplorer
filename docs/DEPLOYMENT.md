@@ -108,7 +108,7 @@ PORT=4175
 EXPLORER_STORES='[
   {
     "id": "main",
-    "name": "Main SljivaStore",
+    "name": "Main Nomin",
     "baseUrl": "https://store.example.com/api/explorer"
   }
 ]'
@@ -190,7 +190,7 @@ cd explorer
 
 **Example:**
 ```bash
-./scripts/add-store.sh main "Main SljivaStore" https://store.example.com/api/explorer
+./scripts/add-store.sh main "Main Nomin" https://store.example.com/api/explorer
 ./scripts/add-store.sh secondary "Secondary Store" https://store2.example.com/api/explorer "public-key-here"
 ```
 
@@ -222,7 +222,7 @@ Update `EXPLORER_STORES` in your `.env.production`:
 EXPLORER_STORES='[
   {
     "id": "main",
-    "name": "Main SljivaStore",
+    "name": "Main Nomin",
     "baseUrl": "https://store1.example.com/api/explorer"
   },
   {
@@ -271,7 +271,7 @@ If stores expose `/.well-known/store-info`, Explorer can discover them automatic
 
 This ensures Explorer can immediately query the store's API after being added. The discovery endpoint works without CORS, but the actual API routes require it.
 
-To allow Explorer to query your SljivaStore backend, you need to:
+To allow Explorer to query your Nomin backend, you need to:
 
 ### Step 1: Enable CORS for Explorer Routes
 
@@ -329,7 +329,7 @@ Stores can expose a discovery endpoint at `/.well-known/store-info` that returns
 ```json
 {
   "id": "main",
-  "name": "Main SljivaStore",
+  "name": "Main Nomin",
   "baseUrl": "https://store.example.com/api/explorer",
   "publicKey": "optional-key"
 }

@@ -21,6 +21,15 @@
   let verificationError: string | null = null;
   let verificationChecks: any[] = [];
 
+  // Reset verification state when result changes (new search)
+  $: if (result) {
+    verificationState = "idle";
+    verificationModalOpen = false;
+    verificationStep = "";
+    verificationError = null;
+    verificationChecks = [];
+  }
+
   // Fetch NFT metadata for transaction
   $: if (result && result.kind === "transaction") {
     if (result.nft) {
@@ -135,7 +144,20 @@
       // Step 4: Dispatch search event with the transactionId
       dispatch("search", { query: previousTransactionId, storeId: null });
     } catch (error) {
-      previousError = error instanceof Error ? error.message : "Failed to fetch previous transaction";
+      // Provide user-friendly error messages
+      let errorMessage = "Failed to fetch previous transaction";
+      if (error instanceof Error) {
+        const errorMsg = error.message;
+        // Check for JSON parsing errors
+        if (errorMsg.includes("JSON") || errorMsg.includes("parse") || errorMsg.includes("Unexpected token")) {
+          errorMessage = "Unable to read previous transaction data. The transaction may still be processing on Arweave, or the data format is invalid.";
+        } else if (errorMsg.includes("pending")) {
+          errorMessage = "Previous transaction is still pending on Arweave. Please try again in a few moments.";
+        } else {
+          errorMessage = errorMsg;
+        }
+      }
+      previousError = errorMessage;
       console.error("Error fetching previous transaction:", error);
     } finally {
       loadingPrevious = false;

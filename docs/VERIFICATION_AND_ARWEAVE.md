@@ -2,7 +2,7 @@
 
 ## Trust Through Transparency: How We Guarantee Transaction Integrity
 
-At SljivaStore, we believe that trust in a decentralized marketplace must be built on cryptographic proof, not promises. Every transaction on our platform is verifiable by anyone, at any time, using standard cryptographic tools. You don't need to trust us—you can verify everything yourself.
+At Nomin, we believe that trust in a decentralized marketplace must be built on cryptographic proof, not promises. Every transaction on our platform is verifiable by anyone, at any time, using standard cryptographic tools. You don't need to trust us—you can verify everything yourself.
 
 ---
 
