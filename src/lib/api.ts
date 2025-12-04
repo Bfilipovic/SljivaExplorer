@@ -50,16 +50,26 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
     // Handle success codes: 200 (OK), 304 (Not Modified)
     // Both indicate store is online - 304 means cached data, but some servers send body anyway
     if (response.ok || response.status === 304) {
-      // Try to parse JSON - for 304, body might be empty (cached) or contain data
+      // For 304, try to parse JSON, but if body is empty (browser cached), that's fine - store is still online
+      // For 200, we should always be able to parse
       try {
-        const data = await response.json();
+        // Clone the response before reading to avoid "body already consumed" errors
+        const clonedResponse = response.clone();
+        const text = await clonedResponse.text();
+        
+        if (!text || text.trim().length === 0) {
+          // Empty body (common for 304 when browser uses cache)
+          console.log(`[fetchLastTransaction] Empty body for ${response.status} from ${storeBaseUrl}/last-transaction - store is online but using cache`);
+          return { transaction: null, error: response.status === 304 ? "Using cached data (304)" : "Empty response body" };
+        }
+        
+        const data = JSON.parse(text);
         console.log(`[fetchLastTransaction] Successfully parsed response from ${storeBaseUrl}/last-transaction (status ${response.status}):`, data);
         return {
           transaction: data.transaction
         };
       } catch (parseError) {
-        // If parsing fails (e.g., empty body on 304), store is still online
-        // Return a result object to indicate store is online, even if we can't parse the data
+        // If parsing fails, store is still online (we got a response)
         console.warn(`[fetchLastTransaction] Could not parse JSON from ${storeBaseUrl}/last-transaction (status ${response.status}):`, parseError);
         // Store is online (we got a response), but we couldn't parse the transaction
         return { transaction: null, error: response.status === 304 ? "Using cached data (304)" : "Failed to parse response" };
