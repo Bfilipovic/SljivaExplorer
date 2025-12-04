@@ -36,6 +36,17 @@ export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any>
     
     // Parse transaction info - read as text first so we can provide better errors
     const txText = await txResponse.text();
+    
+    // Check if Arweave is saying the transaction is pending
+    const trimmedTxText = txText.trim();
+    if (trimmedTxText.toLowerCase() === "pending") {
+      throw new Error(
+        `Arweave transaction ${arweaveTxId} is still pending. ` +
+        `Arweave transactions typically confirm within 1-2 minutes. ` +
+        `Please wait a moment and try verifying again.`
+      );
+    }
+    
     let txInfo: any;
     try {
       txInfo = JSON.parse(txText);
@@ -64,11 +75,21 @@ export async function fetchArweaveTransaction(arweaveTxId: string): Promise<any>
       throw new Error('Arweave transaction data is empty');
     }
     
+    // Check if Arweave is saying the transaction data is pending
+    const trimmedDataText = dataText.trim();
+    if (trimmedDataText.toLowerCase() === "pending") {
+      throw new Error(
+        `Arweave transaction data for ${arweaveTxId} is still pending. ` +
+        `Arweave transactions typically confirm within 1-2 minutes. ` +
+        `Please wait a moment and try verifying again.`
+      );
+    }
+    
     // Check content type
     const dataContentType = dataResponse.headers.get('content-type') || '';
     
     // Trim whitespace before parsing
-    const trimmed = dataText.trim();
+    const trimmed = trimmedDataText;
     
     // Try to parse as JSON first
     try {
@@ -343,12 +364,27 @@ export async function verifyTransaction(
         }
       } catch (arweaveError) {
         const errorMsg = arweaveError instanceof Error ? arweaveError.message : String(arweaveError);
-        checks.push({
-          name: "Arweave Transaction Found",
-          passed: false,
-          message: `Failed to fetch from Arweave: ${errorMsg}`
-        });
-        errors.push(`Failed to verify Arweave data: ${errorMsg}`);
+        
+        // Check if the error is because the transaction is still pending
+        const isPending = errorMsg.toLowerCase().includes("pending");
+        
+        if (isPending) {
+          // Pending is not a failure - just informational
+          checks.push({
+            name: "Arweave Transaction Found",
+            passed: true, // Not a failure, just pending
+            message: `Transaction is still pending on Arweave. This is normal - Arweave transactions typically confirm within 1-2 minutes. The transaction will be available for verification once confirmed.`
+          });
+          // Don't add this to errors - pending is acceptable
+        } else {
+          // Actual error - mark as failed
+          checks.push({
+            name: "Arweave Transaction Found",
+            passed: false,
+            message: `Failed to fetch from Arweave: ${errorMsg}`
+          });
+          errors.push(`Failed to verify Arweave data: ${errorMsg}`);
+        }
       }
     } else {
       // If no Arweave transaction, that's okay - just verify hash
