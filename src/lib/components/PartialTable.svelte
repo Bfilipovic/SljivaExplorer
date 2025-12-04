@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PartialTransaction, Pagination, StoreInfo } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
-  import { getPartLink, getStoreFrontendUrlFromBaseUrl } from "../utils/storeLinks";
+  import { getPartLink } from "../utils/storeLinks";
 
   export let title: string;
   export let partials: PartialTransaction[] = [];
@@ -24,28 +24,46 @@
     return `${base}${hash}`;
   }
 
+  function getStoreFrontendUrl(baseUrl: string): string {
+    try {
+      const url = new URL(baseUrl);
+      const hostname = url.hostname;
+      const protocol = url.protocol;
+      
+      // For localhost, use port 5173 for frontend (standard Vite dev port)
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return `${protocol}//${hostname}:5173`;
+      }
+      
+      // For production, remove /api/explorer path and use base domain
+      return baseUrl.replace(/\/api\/explorer.*$/, "");
+    } catch {
+      // Fallback: try regex extraction
+      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
+      if (match) {
+        const base = match[1];
+        if (base.includes('localhost')) {
+          return base.replace(/:(\d+)/, ':5173');
+        }
+        return base;
+      }
+      return baseUrl;
+    }
+  }
+
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
-    // We know which store this partial came from, so use its baseUrl
+    // Use the same logic as NetworkPage's Visit button
     if (partial.storeId && stores.length > 0) {
       const store = stores.find(s => s.id === partial.storeId);
       if (store && store.baseUrl) {
-        // Derive frontend URL from the store's API baseUrl
-        // baseUrl is like: https://store.example.com/api/explorer
-        // We need: https://store.example.com
-        const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
-        const link = `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
-        // Debug: log if we're still getting localhost
-        if (frontendUrl.includes('localhost')) {
-          console.warn("[PartialTable] Generated localhost link:", link, "Store:", store.id, "baseUrl:", store.baseUrl);
-        }
-        return link;
+        // Use the same function as NetworkPage to get frontend URL
+        const frontendUrl = getStoreFrontendUrl(store.baseUrl);
+        return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
       }
     }
     
     // Fallback - this should not happen in production
-    // If we get here, either stores array is empty or storeId doesn't match
-    console.error("[PartialTable] Cannot generate part link - storeId:", partial.storeId, "stores length:", stores.length, "available store IDs:", stores.map(s => s.id));
     return getPartLink(partial.part);
   }
 
