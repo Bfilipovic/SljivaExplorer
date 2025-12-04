@@ -54,17 +54,43 @@
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
     // Use the same logic as NetworkPage's Visit button
-    if (partial.storeId && stores.length > 0) {
-      const store = stores.find(s => s.id === partial.storeId);
-      if (store && store.baseUrl) {
-        // Use the same function as NetworkPage to get frontend URL
-        const frontendUrl = getStoreFrontendUrl(store.baseUrl);
-        return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
-      }
+    if (!partial.storeId) {
+      console.error("[PartialTable] Partial transaction missing storeId:", partial);
+      return getPartLink(partial.part);
     }
     
-    // Fallback - this should not happen in production
-    return getPartLink(partial.part);
+    if (stores.length === 0) {
+      console.error("[PartialTable] Stores array is empty! Cannot generate part link for storeId:", partial.storeId);
+      return getPartLink(partial.part);
+    }
+    
+    const store = stores.find(s => s.id === partial.storeId);
+    if (!store) {
+      console.error("[PartialTable] Store not found! storeId:", partial.storeId, "Available store IDs:", stores.map(s => s.id));
+      return getPartLink(partial.part);
+    }
+    
+    if (!store.baseUrl) {
+      console.error("[PartialTable] Store has no baseUrl! Store:", store);
+      return getPartLink(partial.part);
+    }
+    
+    // Use the same function as NetworkPage to get frontend URL
+    const frontendUrl = getStoreFrontendUrl(store.baseUrl);
+    const link = `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
+    
+    // Log warning if we're still getting localhost in production
+    if (frontendUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
+      console.error("[PartialTable] Generated localhost link in production!", {
+        link,
+        storeId: partial.storeId,
+        storeBaseUrl: store.baseUrl,
+        frontendUrl,
+        currentHostname: window.location.hostname
+      });
+    }
+    
+    return link;
   }
 
   function getTransactionId(partial: PartialTransaction): string | null {
