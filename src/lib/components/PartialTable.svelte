@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PartialTransaction, Pagination, StoreInfo } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
-  import { getPartLink } from "../utils/storeLinks";
+  import { getPartLink, getStoreFrontendUrlFromBaseUrl } from "../utils/storeLinks";
 
   export let title: string;
   export let partials: PartialTransaction[] = [];
@@ -26,14 +26,17 @@
 
   function getPartLinkForPartial(partial: PartialTransaction): string {
     // Get store baseUrl from stores array if storeId is available
-    let storeBaseUrl: string | undefined;
+    // We know which store this partial came from, so use its baseUrl
     if (partial.storeId && stores.length > 0) {
       const store = stores.find(s => s.id === partial.storeId);
-      if (store) {
-        storeBaseUrl = store.baseUrl;
+      if (store && store.baseUrl) {
+        // Derive frontend URL from the store's API baseUrl
+        const frontendUrl = getStoreFrontendUrlFromBaseUrl(store.baseUrl);
+        return `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
       }
     }
-    return getPartLink(partial.part, storeBaseUrl, stores, partial.storeId);
+    // Fallback to default if store not found
+    return getPartLink(partial.part);
   }
 
   function getTransactionId(partial: PartialTransaction): string | null {
