@@ -82,6 +82,14 @@ function hashableTransaction(transaction: any): any {
   const { _id, arweaveTxId, previous_arweave_tx, ...rest } = transaction;
   const type = String(rest.type || "");
   
+  // Helper to normalize empty strings to null for optional fields
+  const normalizeOptional = (value: any): string | null => {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+    return String(value);
+  };
+  
   // Base fields present in all transaction types
   const base: any = {
     type,
@@ -99,9 +107,8 @@ function hashableTransaction(transaction: any): any {
       base.quantity = Number(rest.quantity || 0);
       base.buyer = minter;
       base.seller = minter;
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
       base.currency = String(rest.currency || "ETH");
       base.amount = String(rest.amount || "0");
       // Include signature fields
@@ -111,9 +118,8 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "LISTING_CREATE": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
       base.nftId = String(rest.nftId || "");
       base.seller = String(rest.seller || "").toLowerCase();
       base.quantity = Number(rest.quantity || 0);
@@ -134,9 +140,8 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "LISTING_CANCEL": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
       base.seller = String(rest.seller || "").toLowerCase();
       // Include signature fields
       if (rest.signer) base.signer = String(rest.signer).toLowerCase();
@@ -145,19 +150,14 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "NFT_BUY": {
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
-        ? String(rest.reservationId) 
-        : null;
+      // Normalize empty strings to null for optional fields (explorer API converts null to "")
+      base.listingId = normalizeOptional(rest.listingId);
+      base.reservationId = normalizeOptional(rest.reservationId);
       base.nftId = String(rest.nftId || "");
       base.buyer = String(rest.buyer || "").toLowerCase();
       base.seller = String(rest.seller || "").toLowerCase();
       base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
+      base.chainTx = normalizeOptional(rest.chainTx);
       base.currency = String(rest.currency || "ETH");
       base.amount = String(rest.amount || "0");
       // Include signature fields
@@ -167,9 +167,8 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "GIFT_CREATE": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
       base.nftId = String(rest.nftId || "");
       // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
       base.giver = String(rest.giver || rest.seller || "").toLowerCase();
@@ -182,17 +181,15 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "GIFT_CLAIM": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
       base.nftId = String(rest.nftId || "");
       // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
       base.giver = String(rest.giver || rest.seller || "").toLowerCase();
       base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
       base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
       base.currency = String(rest.currency || "ETH");
       base.amount = String(rest.amount || "0");
       // Include signature fields
@@ -202,9 +199,8 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "GIFT_REFUSE": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
       // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
       base.giver = String(rest.giver || rest.seller || "").toLowerCase();
       base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
@@ -215,9 +211,8 @@ function hashableTransaction(transaction: any): any {
     }
     
     case "GIFT_CANCEL": {
-      base.giftId = rest.giftId !== null && rest.giftId !== undefined 
-        ? String(rest.giftId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.giftId = normalizeOptional(rest.giftId);
       // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
       base.giver = String(rest.giver || rest.seller || "").toLowerCase();
       base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
@@ -230,19 +225,15 @@ function hashableTransaction(transaction: any): any {
     // Legacy types for backward compatibility
     case "TRANSACTION": {
       // Legacy TRANSACTION type - map to NFT_BUY structure
-      base.listingId = rest.listingId !== null && rest.listingId !== undefined 
-        ? String(rest.listingId) 
-        : null;
-      base.reservationId = rest.reservationId !== null && rest.reservationId !== undefined 
-        ? String(rest.reservationId) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.listingId = normalizeOptional(rest.listingId);
+      base.reservationId = normalizeOptional(rest.reservationId);
       base.nftId = String(rest.nftId || "");
       base.buyer = String(rest.buyer || "").toLowerCase();
       base.seller = String(rest.seller || "").toLowerCase();
       base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
       base.currency = String(rest.currency || "ETH");
       base.amount = String(rest.amount || "0");
       if (rest.signer) base.signer = String(rest.signer).toLowerCase();
@@ -257,9 +248,8 @@ function hashableTransaction(transaction: any): any {
       base.giver = String(rest.giver || rest.seller || "").toLowerCase();
       base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
       base.quantity = Number(rest.quantity || 0);
-      base.chainTx = rest.chainTx !== null && rest.chainTx !== undefined 
-        ? String(rest.chainTx) 
-        : null;
+      // Normalize empty strings to null for optional fields
+      base.chainTx = normalizeOptional(rest.chainTx);
       base.currency = String(rest.currency || "ETH");
       base.amount = String(rest.amount || "0");
       if (rest.signer) base.signer = String(rest.signer).toLowerCase();
