@@ -37,7 +37,6 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
   error?: string;
 } | null> {
   try {
-    console.log(`[fetchLastTransaction] Fetching from ${storeBaseUrl}/last-transaction`);
     const response = await fetch(`${storeBaseUrl}/last-transaction`, {
       headers: {
         Accept: "application/json"
@@ -45,13 +44,10 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
       signal: AbortSignal.timeout(10000) // 10 second timeout (increased from 5)
     });
 
-    console.log(`[fetchLastTransaction] Response status: ${response.status}, ok: ${response.ok} for ${storeBaseUrl}/last-transaction`);
-
     // Handle 304 (Not Modified) first - this means store is online and browser has cached data
     // For 304, the response body might not be accessible to JavaScript, but the store is definitely online
     // The 304 status code itself is proof that the server responded, so the store is online
     if (response.status === 304) {
-      console.log(`[fetchLastTransaction] Received 304 (Not Modified) from ${storeBaseUrl}/last-transaction - store is ONLINE (server responded with cached data)`);
       // Try to read body if available (some servers send body with 304), but don't fail if unavailable
       try {
         // Read response as text first to avoid "body already consumed" errors
@@ -59,16 +55,13 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
         if (text && text.trim().length > 0) {
           try {
             const data = JSON.parse(text);
-            console.log(`[fetchLastTransaction] Successfully parsed 304 response body:`, data);
             return { transaction: data.transaction || null };
           } catch {
             // JSON parse failed, but store is still online
-            console.log(`[fetchLastTransaction] 304 response body is not valid JSON, but store is online`);
           }
         }
       } catch (readError) {
         // Body might not be accessible for 304 - that's fine, store is still online
-        console.log(`[fetchLastTransaction] Could not read 304 response body (browser using cache) - store is still ONLINE`);
       }
       // Store is online (304 proves the server responded), return success even without transaction data
       return { transaction: null, error: "Using cached data (304)" };
@@ -78,13 +71,11 @@ export async function fetchLastTransaction(storeBaseUrl: string): Promise<{
     if (response.ok) {
       try {
         const data = await response.json();
-        console.log(`[fetchLastTransaction] Successfully parsed response from ${storeBaseUrl}/last-transaction (status ${response.status}):`, data);
         return {
           transaction: data.transaction || null
         };
       } catch (parseError) {
         // If parsing fails, store is still online (we got a response)
-        console.warn(`[fetchLastTransaction] Could not parse JSON from ${storeBaseUrl}/last-transaction (status ${response.status}):`, parseError);
         return { transaction: null, error: "Failed to parse response" };
       }
     }
