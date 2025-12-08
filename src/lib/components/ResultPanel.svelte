@@ -245,7 +245,6 @@
         title="Partial Transactions"
         partials={result.partialTransactions}
         pagination={result.pagination}
-        stores={stores}
       />
     </div>
   </section>

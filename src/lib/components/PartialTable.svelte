@@ -1,19 +1,10 @@
 <script lang="ts">
-  import type { PartialTransaction, Pagination, StoreInfo } from "../types";
+  import type { PartialTransaction, Pagination } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
-  import { getPartLink } from "../utils/storeLinks";
 
   export let title: string;
   export let partials: PartialTransaction[] = [];
   export let pagination: Pagination | null = null;
-  export let stores: StoreInfo[] = [];
-  
-  // Reactive: log when stores change
-  $: if (stores.length > 0) {
-    console.log("[PartialTable] Stores loaded:", stores.length, stores.map(s => ({ id: s.id, baseUrl: s.baseUrl })));
-  } else {
-    console.warn("[PartialTable] Stores array is empty!");
-  }
 
   $: rangeStart =
     pagination && pagination.total > 0 ? pagination.skip + 1 : partials.length ? 1 : 0;
@@ -31,87 +22,6 @@
     return `${base}${hash}`;
   }
 
-  function getStoreFrontendUrl(baseUrl: string): string {
-    // Always use the current browser's origin (production domain)
-    // This works even if backend returns localhost (Docker internal communication)
-    if (typeof window !== 'undefined') {
-      return window.location.origin;
-    }
-    
-    // Fallback for SSR: try to extract from baseUrl
-    try {
-      const url = new URL(baseUrl);
-      return url.origin;
-    } catch {
-      // Last resort: remove /api/explorer path
-      return baseUrl.replace(/\/api\/explorer.*$/, "");
-    }
-  }
-
-  function getPartLinkForPartial(partial: PartialTransaction): string {
-    // Get store baseUrl from stores array if storeId is available
-    // Use the same logic as NetworkPage's Visit button
-    
-    // Always log for debugging
-    console.log("[PartialTable] Generating part link:", {
-      part: partial.part,
-      storeId: partial.storeId,
-      storesLength: stores.length,
-      storeIds: stores.map(s => s.id),
-      stores: stores.map(s => ({ id: s.id, baseUrl: s.baseUrl }))
-    });
-    
-    if (!partial.storeId) {
-      console.error("[PartialTable] Partial transaction missing storeId:", partial);
-      // Don't fall back to localhost - return a placeholder
-      return "#";
-    }
-    
-    if (stores.length === 0) {
-      console.error("[PartialTable] Stores array is empty! Cannot generate part link for storeId:", partial.storeId);
-      // Don't fall back to localhost - return a placeholder
-      return "#";
-    }
-    
-    const store = stores.find(s => s.id === partial.storeId);
-    if (!store) {
-      console.error("[PartialTable] Store not found! storeId:", partial.storeId, "Available store IDs:", stores.map(s => s.id));
-      // Don't fall back to localhost - return a placeholder
-      return "#";
-    }
-    
-    if (!store.baseUrl) {
-      console.error("[PartialTable] Store has no baseUrl! Store:", store);
-      // Don't fall back to localhost - return a placeholder
-      return "#";
-    }
-    
-    // Use the same function as NetworkPage to get frontend URL
-    const frontendUrl = getStoreFrontendUrl(store.baseUrl);
-    const link = `${frontendUrl}/part/${encodeURIComponent(partial.part)}`;
-    
-    // Always log the generated link
-    console.log("[PartialTable] Generated link:", {
-      link,
-      storeId: partial.storeId,
-      storeBaseUrl: store.baseUrl,
-      frontendUrl,
-      currentHostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown'
-    });
-    
-    // Log error if we're getting localhost in production
-    if (typeof window !== 'undefined' && frontendUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
-      console.error("[PartialTable] ERROR: Generated localhost link in production!", {
-        link,
-        storeId: partial.storeId,
-        storeBaseUrl: store.baseUrl,
-        frontendUrl,
-        currentHostname: window.location.hostname
-      });
-    }
-    
-    return link;
-  }
 
   function getTransactionId(partial: PartialTransaction): string | null {
     // Return the parent transaction ID (transaction field takes precedence over txId)
@@ -158,20 +68,7 @@
         <tbody>
           {#each partials as partial}
             <tr>
-              <td>
-                {#each [partial] as p}
-                  {@const partLink = getPartLinkForPartial(p)}
-                  <a
-                    href={partLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="part-link"
-                    title={partLink}
-                  >
-                    {formatAddress(p.part)}
-                  </a>
-                {/each}
-              </td>
+              <td>{formatAddress(partial.part)}</td>
               <td>{formatAddress(partial.from)}</td>
               <td>{formatAddress(partial.to)}</td>
               <td>{formatAmount(partial.amount, partial.currency)}</td>
@@ -290,15 +187,6 @@
   }
 
   .tx-link:hover {
-    text-decoration: underline;
-  }
-
-  .part-link {
-    color: var(--accent);
-    text-decoration: none;
-  }
-
-  .part-link:hover {
     text-decoration: underline;
   }
 
