@@ -4,7 +4,7 @@
   import PartialTable from "./PartialTable.svelte";
   import PartsList from "./PartsList.svelte";
   import VerificationModal from "./VerificationModal.svelte";
-  import { getPartLink, getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
+  import { getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
   import { fetchNftMetadata } from "../api";
   import { verifyTransaction, fetchArweaveTransaction } from "../utils/verification";
 
@@ -178,16 +178,7 @@
         <dl>
           <div>
             <dt>Part Hash</dt>
-            <dd>
-              <a
-                href={getPartLink(result.part._id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="part-link"
-              >
-                {result.part._id}
-              </a>
-            </dd>
+            <dd>{result.part._id}</dd>
           </div>
           <div>
             <dt>Part Number</dt>
