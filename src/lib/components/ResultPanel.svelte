@@ -653,14 +653,12 @@
     color: var(--text-muted);
   }
 
-  .part-link,
   .chain-tx-link {
     color: var(--accent);
     text-decoration: none;
     word-break: break-all;
   }
 
-  .part-link:hover,
   .chain-tx-link:hover {
     text-decoration: underline;
   }
