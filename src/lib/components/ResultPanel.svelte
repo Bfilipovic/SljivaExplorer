@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ExplorerResult, ExplorerNFT, StoreInfo } from "../types";
+  import type { ExplorerResult, ExplorerNFT } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
   import PartsList from "./PartsList.svelte";
@@ -11,7 +11,6 @@
   import { createEventDispatcher } from "svelte";
   
   export let result: ExplorerResult | null = null;
-  export let stores: StoreInfo[] = [];
   
   const dispatch = createEventDispatcher();
 
