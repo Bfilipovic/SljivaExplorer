@@ -6,20 +6,10 @@
   export let pagination: Pagination | null = null;
   export let stores: StoreInfo[] = [];
 
-  // Use the same function as NetworkPage to get store frontend URL
+  // Use the exact same function as NetworkPage's Visit button
   function getStoreFrontendUrl(baseUrl: string): string {
     console.log("[PartsList.getStoreFrontendUrl] Called with baseUrl:", baseUrl);
     
-    // Always use the current browser's origin (production domain)
-    if (typeof window !== 'undefined') {
-      const origin = window.location.origin;
-      console.log("[PartsList.getStoreFrontendUrl] Using window.location.origin:", origin);
-      return origin;
-    }
-    
-    console.log("[PartsList.getStoreFrontendUrl] window is undefined, using fallback");
-    
-    // Fallback for SSR: try to extract from baseUrl
     try {
       const url = new URL(baseUrl);
       const hostname = url.hostname;
@@ -61,13 +51,14 @@
   function getPartLink(part: ExplorerPart): string {
     console.log("[PartsList.getPartLink] Called for part:", {
       partId: part._id,
-      storeId: part.storeId,
+      partStoreId: part.storeId, // This part's store ID
       storeName: part.storeName,
       storesLength: stores.length,
-      storeIds: stores.map(s => s.id)
+      availableStoreIds: stores.map(s => s.id) // All available store IDs (for debugging)
     });
     
-    // If we have storeId, look up the store and use its baseUrl
+    // Get the store's baseUrl from stores array using part's storeId
+    // Same logic as NetworkPage's Visit button
     if (part.storeId && stores.length > 0) {
       console.log("[PartsList.getPartLink] Looking up store with storeId:", part.storeId);
       const store = stores.find(s => s.id === part.storeId);
@@ -78,9 +69,10 @@
           baseUrl: store.baseUrl
         });
         if (store.baseUrl) {
+          // Use the same function as NetworkPage's Visit button to get frontend URL
           const frontendUrl = getStoreFrontendUrl(store.baseUrl);
           const link = `${frontendUrl}/part/${encodeURIComponent(part._id)}`;
-          console.log("[PartsList.getPartLink] Generated link:", link);
+          console.log("[PartsList.getPartLink] Generated link:", link, "from store baseUrl:", store.baseUrl);
           return link;
         } else {
           console.error("[PartsList.getPartLink] Store has no baseUrl!");
