@@ -1,97 +1,18 @@
 <script lang="ts">
   import type { ExplorerPart, Pagination, StoreInfo } from "../types";
   import { formatAddress } from "../utils/format";
+  import { createEventDispatcher } from "svelte";
 
   export let parts: ExplorerPart[] = [];
   export let pagination: Pagination | null = null;
-  export let stores: StoreInfo[] = [];
 
-  // Use the exact same function as NetworkPage's Visit button
-  function getStoreFrontendUrl(baseUrl: string): string {
-    console.log("[PartsList.getStoreFrontendUrl] Called with baseUrl:", baseUrl);
-    
-    try {
-      const url = new URL(baseUrl);
-      const hostname = url.hostname;
-      const protocol = url.protocol;
-      
-      console.log("[PartsList.getStoreFrontendUrl] Parsed URL - hostname:", hostname, "protocol:", protocol);
-      
-      // For localhost, use port 5173 for frontend (standard Vite dev port)
-      if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        const result = `${protocol}//${hostname}:5173`;
-        console.log("[PartsList.getStoreFrontendUrl] Localhost detected, returning:", result);
-        return result;
-      }
-      
-      // For production, remove /api/explorer path and use base domain
-      const result = baseUrl.replace(/\/api\/explorer.*$/, "");
-      console.log("[PartsList.getStoreFrontendUrl] Production URL, returning:", result);
-      return result;
-    } catch (error) {
-      console.log("[PartsList.getStoreFrontendUrl] URL parsing failed, trying regex. Error:", error);
-      // Fallback: try regex extraction
-      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
-      if (match) {
-        const base = match[1];
-        console.log("[PartsList.getStoreFrontendUrl] Regex match found:", base);
-        if (base.includes('localhost')) {
-          const result = base.replace(/:(\d+)/, ':5173');
-          console.log("[PartsList.getStoreFrontendUrl] Localhost in regex, returning:", result);
-          return result;
-        }
-        console.log("[PartsList.getStoreFrontendUrl] Returning regex base:", base);
-        return base;
-      }
-      console.log("[PartsList.getStoreFrontendUrl] All fallbacks failed, returning original baseUrl:", baseUrl);
-      return baseUrl;
-    }
-  }
+  const dispatch = createEventDispatcher<{
+    search: { query: string };
+  }>();
 
-  function getPartLink(part: ExplorerPart): string {
-    console.log("[PartsList.getPartLink] Called for part:", {
-      partId: part._id,
-      partStoreId: part.storeId, // This part's store ID
-      storeName: part.storeName,
-      storesLength: stores.length,
-      availableStoreIds: stores.map(s => s.id) // All available store IDs (for debugging)
-    });
-    
-    // Get the store's baseUrl from stores array using part's storeId
-    // Same logic as NetworkPage's Visit button
-    if (part.storeId && stores.length > 0) {
-      console.log("[PartsList.getPartLink] Looking up store with storeId:", part.storeId);
-      const store = stores.find(s => s.id === part.storeId);
-      if (store) {
-        console.log("[PartsList.getPartLink] Store found:", {
-          id: store.id,
-          name: store.name,
-          baseUrl: store.baseUrl
-        });
-        if (store.baseUrl) {
-          // Use the same function as NetworkPage's Visit button to get frontend URL
-          const frontendUrl = getStoreFrontendUrl(store.baseUrl);
-          const link = `${frontendUrl}/part/${encodeURIComponent(part._id)}`;
-          console.log("[PartsList.getPartLink] Generated link:", link, "from store baseUrl:", store.baseUrl);
-          return link;
-        } else {
-          console.error("[PartsList.getPartLink] Store has no baseUrl!");
-        }
-      } else {
-        console.error("[PartsList.getPartLink] Store not found! Available stores:", stores.map(s => ({ id: s.id, name: s.name })));
-      }
-    } else {
-      if (!part.storeId) {
-        console.warn("[PartsList.getPartLink] Part has no storeId");
-      }
-      if (stores.length === 0) {
-        console.warn("[PartsList.getPartLink] Stores array is empty!");
-      }
-    }
-    
-    // Fallback: no link if store not found
-    console.log("[PartsList.getPartLink] Returning fallback '#'");
-    return "#";
+  function handlePartHashClick(partHash: string, event: MouseEvent) {
+    event.preventDefault();
+    dispatch("search", { query: partHash });
   }
 
   $: rangeStart = pagination && pagination.total > 0 ? pagination.skip + 1 : parts.length ? 1 : 0;
@@ -124,18 +45,14 @@
           {#each parts as part}
             <tr>
               <td>
-                {#if part.storeId}
-                  <a
-                    href={getPartLink(part)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="part-link"
-                  >
-                    {formatAddress(part._id)}
-                  </a>
-                {:else}
+                <button
+                  type="button"
+                  class="hash-link"
+                  on:click={(e) => handlePartHashClick(part._id, e)}
+                  title="Search for this part hash"
+                >
                   {formatAddress(part._id)}
-                {/if}
+                </button>
               </td>
               <td>{part.part_no}</td>
               <td>{formatAddress(part.owner)}</td>
@@ -218,12 +135,19 @@
     color: var(--text-muted);
   }
 
-  .part-link {
+  .hash-link {
+    background: transparent;
+    border: none;
     color: var(--accent);
     text-decoration: none;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    transition: text-decoration 0.2s ease;
   }
 
-  .part-link:hover {
+  .hash-link:hover {
     text-decoration: underline;
   }
 </style>

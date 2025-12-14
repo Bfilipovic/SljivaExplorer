@@ -6,12 +6,16 @@
   import VerificationModal from "./VerificationModal.svelte";
   import { getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
   import { fetchNftMetadata } from "../api";
-  import { verifyTransaction, fetchArweaveTransaction } from "../utils/verification";
+  import { verifyTransaction } from "../utils/verification";
 
   import { createEventDispatcher } from "svelte";
   
   export let result: ExplorerResult | null = null;
-  export let stores: StoreInfo[] = [];
+  export let canGoBack = false;
+  export let canGoForward = false;
+  export let loading = false;
+  export let onGoBack: (() => void) | null = null;
+  export let onGoForward: (() => void) | null = null;
   
   const dispatch = createEventDispatcher();
 
@@ -103,67 +107,6 @@
     }
   }
 
-  let loadingPrevious = false;
-  let previousError: string | null = null;
-
-  async function handlePreviousTransaction() {
-    if (!result || result.kind !== "transaction" || !result.transaction.arweaveTxId) {
-      return;
-    }
-
-    loadingPrevious = true;
-    previousError = null;
-
-    try {
-      // Step 1: Fetch current transaction from Arweave to get previous_arweave_tx
-      const currentArweaveData = await fetchArweaveTransaction(result.transaction.arweaveTxId);
-      const previousArweaveTxId = currentArweaveData.previous_arweave_tx;
-
-      if (!previousArweaveTxId) {
-        previousError = "This is the first transaction in the chain";
-        loadingPrevious = false;
-        return;
-      }
-
-      // Step 2: Fetch previous transaction from Arweave to get its transactionId
-      const previousArweaveData = await fetchArweaveTransaction(previousArweaveTxId);
-      const previousTransactionId = previousArweaveData.transactionId;
-
-      if (!previousTransactionId) {
-        previousError = "Previous transaction does not have a transactionId";
-        loadingPrevious = false;
-        return;
-      }
-
-      // Step 3: Reset verification state for the new transaction
-      verificationState = "idle";
-      verificationModalOpen = false;
-      verificationStep = "";
-      verificationError = null;
-      verificationChecks = [];
-
-      // Step 4: Dispatch search event with the transactionId
-      dispatch("search", { query: previousTransactionId, storeId: null });
-    } catch (error) {
-      // Provide user-friendly error messages
-      let errorMessage = "Failed to fetch previous transaction";
-      if (error instanceof Error) {
-        const errorMsg = error.message;
-        // Check for JSON parsing errors
-        if (errorMsg.includes("JSON") || errorMsg.includes("parse") || errorMsg.includes("Unexpected token")) {
-          errorMessage = "Unable to read previous transaction data. The transaction may still be processing on Arweave, or the data format is invalid.";
-        } else if (errorMsg.includes("pending")) {
-          errorMessage = "Previous transaction is still pending on Arweave. Please try again in a few moments.";
-        } else {
-          errorMessage = errorMsg;
-        }
-      }
-      previousError = errorMessage;
-      console.error("Error fetching previous transaction:", error);
-    } finally {
-      loadingPrevious = false;
-    }
-  }
 </script>
 
 {#if result}
@@ -176,6 +119,7 @@
     <div class="grid">
       <div class="card">
         <h3>Part Metadata</h3>
+        <div class="card-content">
         <dl>
           <div>
             <dt>Part Hash</dt>
@@ -204,6 +148,25 @@
             </div>
           {/if}
         </dl>
+        </div>
+        <div class="navigation-buttons">
+          <button
+            class="nav-button"
+            disabled={!canGoBack || loading}
+            on:click={() => onGoBack?.()}
+            title="Go to previous search"
+          >
+            ← Previous
+          </button>
+          <button
+            class="nav-button"
+            disabled={!canGoForward || loading}
+            on:click={() => onGoForward?.()}
+            title="Go to next search"
+          >
+            Next →
+          </button>
+        </div>
       </div>
       {#if result.nft}
         <div class="card media-card">
@@ -236,6 +199,8 @@
         title="Partial Transactions"
         partials={result.partialTransactions}
         pagination={result.pagination}
+        showTransactionHash={result.kind === "part"}
+        on:search={(e) => dispatch("search", e.detail)}
       />
     </div>
   </section>
@@ -279,6 +244,7 @@
             </div>
           {/if}
         </div>
+        <div class="card-content">
         <dl>
           <div>
             <dt>Transaction ID</dt>
@@ -378,24 +344,25 @@
             </div>
           {/if}
         </dl>
-        {#if result.transaction.arweaveTxId}
-          <div class="button-group">
-            <button
-              class="previous-button"
-              disabled={loadingPrevious}
-              on:click={handlePreviousTransaction}
-            >
-              {#if loadingPrevious}
-                Loading...
-              {:else}
-                ← Previous Transaction
-              {/if}
-            </button>
-            {#if previousError}
-              <p class="error-text">{previousError}</p>
-            {/if}
-          </div>
-        {/if}
+        </div>
+        <div class="navigation-buttons">
+          <button
+            class="nav-button"
+            disabled={!canGoBack || loading}
+            on:click={() => onGoBack?.()}
+            title="Go to previous search"
+          >
+            ← Previous
+          </button>
+          <button
+            class="nav-button"
+            disabled={!canGoForward || loading}
+            on:click={() => onGoForward?.()}
+            title="Go to next search"
+          >
+            Next →
+          </button>
+        </div>
       </div>
       {#if transactionNft}
         <div class="card media-card">
@@ -425,7 +392,11 @@
         </div>
       {/if}
       {#if result.parts && result.parts.length > 0}
-        <PartsList parts={result.parts} pagination={result.pagination} stores={stores} />
+        <PartsList 
+          parts={result.parts} 
+          pagination={result.pagination}
+          on:search={(e) => dispatch("search", e.detail)}
+        />
       {:else}
         <div class="card note-card">
           <h3>Parts</h3>
@@ -473,6 +444,7 @@
   .grid {
     display: grid;
     gap: 1.5rem;
+    align-items: stretch;
   }
 
   @media (min-width: 1280px) {
@@ -481,12 +453,34 @@
     }
   }
 
+  .grid > * {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
   .card {
     background: var(--card-bg);
     border-radius: 1rem;
     border: 1px solid var(--card-border);
     padding: 1.25rem 1.5rem;
     box-shadow: 0 18px 40px var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 600px;
+    max-height: 600px;
+  }
+
+  .card-content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .card-content > dl {
+    display: grid;
+    gap: 0.75rem;
   }
 
   .note-card p {
@@ -565,35 +559,6 @@
     color: var(--text-primary);
   }
 
-  .previous-button {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    border: 1px solid var(--card-border);
-    background: var(--accent);
-    color: white;
-    font-weight: 500;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: opacity 0.2s ease, background 0.2s ease;
-    width: 100%;
-    margin-top: 1rem;
-  }
-
-  .previous-button:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .previous-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-
-  .error-text {
-    color: #ef4444;
-    font-size: 0.875rem;
-    margin-top: 0.5rem;
-  }
-
   @media (max-width: 640px) {
     .card-header {
       flex-direction: column;
@@ -628,6 +593,43 @@
     font-size: 0.95rem;
     color: var(--text-primary);
     word-break: break-all;
+  }
+
+  .navigation-buttons {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--card-border);
+  }
+
+  .nav-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px var(--card-shadow);
+  }
+
+  .nav-button:hover:not(:disabled) {
+    background: var(--card-border);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px var(--card-shadow);
+  }
+
+  .nav-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .nav-button:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   .media-card figure {

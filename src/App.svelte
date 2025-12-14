@@ -23,6 +23,15 @@
   let mobileMenuOpen = false;
   let activeSection = "search";
   let showTosModal = false;
+
+  // Search history for browser-like navigation
+  type HistoryEntry = {
+    query: string;
+    storeId: string | null;
+  };
+  let searchHistory: HistoryEntry[] = [];
+  let historyIndex = -1; // Current position in history (-1 means no history)
+  let isNavigatingHistory = false; // Flag to prevent adding to history when navigating
   
   // Terms of Service text
   const tosText = `NFTs are the evidence of physical asset in the digital world that can be bought and sold like any other piece of property, issued via Blockchain.
@@ -53,7 +62,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     }
   });
 
-  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
+  async function executeSearch(value: string, page = 0, storeId: string | null = null, addToHistory = true) {
     const input = value.trim();
     if (!input) {
       error = "Please enter a value to search.";
@@ -74,20 +83,58 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       result = data;
       pagination = data.pagination;
       currentPage = page;
+
+      // Add to history if not navigating through history
+      if (addToHistory && !isNavigatingHistory) {
+        const newEntry: HistoryEntry = { query: input, storeId };
+        // Remove any forward history (if we're not at the end)
+        if (historyIndex < searchHistory.length - 1) {
+          searchHistory = searchHistory.slice(0, historyIndex + 1);
+        }
+        // Add new entry
+        searchHistory = [...searchHistory, newEntry];
+        historyIndex = searchHistory.length - 1;
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : "Unexpected error";
       result = null;
       pagination = null;
     } finally {
       loading = false;
+      isNavigatingHistory = false;
     }
   }
 
   async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
     query = event.detail.query;
     selectedStoreId = event.detail.storeId ?? null;
-    await executeSearch(query, 0, selectedStoreId);
+    await executeSearch(query, 0, selectedStoreId, true);
   }
+
+  async function goBack() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      const entry = searchHistory[historyIndex];
+      isNavigatingHistory = true;
+      query = entry.query;
+      selectedStoreId = entry.storeId;
+      await executeSearch(entry.query, 0, entry.storeId, false);
+    }
+  }
+
+  async function goForward() {
+    if (historyIndex < searchHistory.length - 1) {
+      historyIndex++;
+      const entry = searchHistory[historyIndex];
+      isNavigatingHistory = true;
+      query = entry.query;
+      selectedStoreId = entry.storeId;
+      await executeSearch(entry.query, 0, entry.storeId, false);
+    }
+  }
+
+  $: canGoBack = historyIndex > 0;
+  $: canGoForward = historyIndex < searchHistory.length - 1;
 
   function totalPages() {
     if (!pagination) return 0;
@@ -221,10 +268,19 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     </div>
 
     {#if result}
-      <ResultPanel {result} {stores} on:search={handleSearch} on:navigateToVerification={() => {
-        setActiveSection('verification');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }} />
+      <ResultPanel 
+        {result} 
+        {canGoBack}
+        {canGoForward}
+        {loading}
+        onGoBack={goBack}
+        onGoForward={goForward}
+        on:search={handleSearch} 
+        on:navigateToVerification={() => {
+          setActiveSection('verification');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }} 
+      />
     {/if}
   {:else if activeSection === 'network'}
     <NetworkPage />
