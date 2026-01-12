@@ -95,22 +95,23 @@
       
       // For localhost, use port 5173 for frontend (standard Vite dev port)
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${protocol}//${hostname}:5173`;
+        return `${protocol}//${hostname}:5173/store`;
       }
       
-      // For production, remove /api/explorer path and use base domain
-      return baseUrl.replace(/\/api\/explorer.*$/, "");
+      // For production, remove /api/explorer path and use base domain + /store
+      const base = baseUrl.replace(/\/api\/explorer.*$/, "");
+      return `${base}/store`;
     } catch {
       // Fallback: try regex extraction
       const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
       if (match) {
         const base = match[1];
         if (base.includes('localhost')) {
-          return base.replace(/:(\d+)/, ':5173');
+          return base.replace(/:(\d+)/, ':5173') + '/store';
         }
-        return base;
+        return base + '/store';
       }
-      return baseUrl;
+      return baseUrl.replace(/\/api\/explorer.*$/, "") + '/store';
     }
   }
 
