@@ -33,7 +33,7 @@
   let historyIndex = -1; // Current position in history (-1 means no history)
   let isNavigatingHistory = false; // Flag to prevent adding to history when navigating
   
-  // Terms of Service text
+  // Terms of Service text - matches main store
   const tosText = `NFTs are the evidence of the Real-world asset (RWA) in the digital world that can be bought and sold like any other piece of property, issued via Blockchain.
 
 The Platform is built on top of the Blockchain network and users can buy and sell NFT parts using the crypto currencies, only, Ether (ETH) or Solana (SOL). 
