@@ -178,36 +178,29 @@ function compareTransactionFields(local: any, arweave: any): string[] {
   const normalizedLocal = normalizeTransactionForComparison(local);
   
   // Fields to compare (excluding transactionId and previous_arweave_tx which are metadata)
+  // All transactions now have the same structure, so we compare all fields consistently
   const fieldsToCompare = [
     "type",
     "transaction_number",
+    "listingId",
+    "reservationId",
+    "giftId",
     "nftId",
     "quantity",
+    "buyer",
+    "seller",
+    "giver",
+    "receiver",
     "chainTx",
     "currency",
     "amount",
+    "price",
+    "sellerWallets",
+    "bundleSale",
     "timestamp",
-    "signer",    // Added for signature verification
-    "signature", // Added for signature verification
+    "signer",
+    "signature",
   ];
-  
-  // Add type-specific fields
-  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
-    fieldsToCompare.push("giver", "receiver");
-    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
-  } else if (normalizedLocal.type === "MINT") {
-    fieldsToCompare.push("buyer", "seller");
-  } else if (normalizedLocal.type === "LISTING_CREATE") {
-    fieldsToCompare.push("seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.price) fieldsToCompare.push("price");
-    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
-    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
-  } else {
-    fieldsToCompare.push("buyer", "seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.reservationId) fieldsToCompare.push("reservationId");
-  }
   
   for (const field of fieldsToCompare) {
     const localValue = normalizeValue(normalizedLocal[field]);
@@ -286,7 +279,8 @@ export async function verifyTransaction(
     
     // Step 2: Verify transaction structure
     updateStep("Verifying transaction structure");
-    const hasRequiredFields = transaction.type && transaction.nftId && transaction.quantity !== undefined;
+    // All transactions now have the same structure - just check for type
+    const hasRequiredFields = !!(transaction.type);
     checks.push({
       name: "Transaction Structure",
       passed: hasRequiredFields,
