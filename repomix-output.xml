@@ -79,6 +79,7 @@ src/
       VerificationPage.svelte
     utils/
       format.ts
+      hash_new.ts
       hash.ts
       storeLinks.ts
       verification.ts
@@ -111,6 +112,172 @@ vitest.setup.ts
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="src/lib/utils/hash_new.ts">
+/**
+ * Client-side hash calculation utilities
+ * Ported from backend/utils/hash.js for transaction verification
+ * 
+ * IMPORTANT: This must match backend/utils/hash.js exactly!
+ * 
+ * UPDATED: Now uses unified structure for all transaction types (standardized)
+ */
+
+/**
+ * Deterministic stringify function for consistent hashing.
+ * Handles object key sorting, Date serialization, null/undefined normalization
+ */
+function deterministicStringify(obj: any): string {
+  if (obj === null) {
+    return "null";
+  }
+  if (obj === undefined) {
+    return "undefined";
+  }
+  
+  // Handle primitives
+  if (typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  
+  // Handle Date objects
+  if (obj instanceof Date) {
+    return JSON.stringify(obj.toISOString());
+  }
+  
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    const items = obj.map(item => deterministicStringify(item));
+    return `[${items.join(",")}]`;
+  }
+  
+  // Handle objects - sort keys for consistency
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    const value = obj[key];
+    // Skip undefined values to maintain consistency
+    if (value === undefined) {
+      return null;
+    }
+    const serializedValue = deterministicStringify(value);
+    return `${JSON.stringify(key)}:${serializedValue}`;
+  }).filter((pair): pair is string => pair !== null);
+  
+  return `{${pairs.join(",")}}`;
+}
+
+/**
+ * Hash an object deterministically using SHA-256
+ */
+async function hashObject(obj: any): Promise<string> {
+  const serialized = deterministicStringify(obj);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(serialized);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Create a hashable representation of a Transaction for hashing.
+ * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
+ * 
+ * All transactions now have the same structure with consistent fields.
+ * Excludes technical metadata (_id, arweaveTxId, previous_arweave_tx).
+ * Excludes imageUrl (for display only, not part of hash).
+ * 
+ * Handles all transaction types:
+ * - MINT
+ * - LISTING_CREATE
+ * - LISTING_CANCEL
+ * - NFT_BUY
+ * - GIFT_CREATE
+ * - GIFT_CLAIM
+ * - GIFT_REFUSE
+ * - GIFT_CANCEL
+ */
+function hashableTransaction(transaction: any): any {
+  // Exclude technical metadata that should not be in hash
+  const { _id, arweaveTxId, previous_arweave_tx, imageUrl, ...rest } = transaction;
+  
+  // Normalize all fields consistently - all transactions now have the same structure
+  const base: any = {
+    type: String(rest.type || ""),
+    transaction_number: Number(rest.transaction_number || 0),
+    timestamp: rest.timestamp instanceof Date 
+      ? rest.timestamp 
+      : new Date(rest.timestamp || Date.now()),
+    // Entity references
+    listingId: rest.listingId !== null && rest.listingId !== undefined 
+      ? String(rest.listingId) 
+      : null,
+    reservationId: rest.reservationId !== null && rest.reservationId !== undefined 
+      ? String(rest.reservationId) 
+      : null,
+    giftId: rest.giftId !== null && rest.giftId !== undefined 
+      ? String(rest.giftId) 
+      : null,
+    // NFT/Part fields
+    nftId: rest.nftId !== null && rest.nftId !== undefined 
+      ? String(rest.nftId) 
+      : null,
+    quantity: Number(rest.quantity || 0),
+    // Party fields
+    buyer: rest.buyer !== null && rest.buyer !== undefined 
+      ? String(rest.buyer).toLowerCase() 
+      : null,
+    seller: rest.seller !== null && rest.seller !== undefined 
+      ? String(rest.seller).toLowerCase() 
+      : null,
+    giver: rest.giver !== null && rest.giver !== undefined 
+      ? String(rest.giver).toLowerCase() 
+      : null,
+    receiver: rest.receiver !== null && rest.receiver !== undefined 
+      ? String(rest.receiver).toLowerCase() 
+      : null,
+    // Chain transaction fields
+    chainTx: rest.chainTx !== null && rest.chainTx !== undefined 
+      ? String(rest.chainTx) 
+      : null,
+    currency: rest.currency !== null && rest.currency !== undefined 
+      ? String(rest.currency) 
+      : null,
+    amount: rest.amount !== null && rest.amount !== undefined 
+      ? String(rest.amount) 
+      : null,
+    // Listing-specific fields
+    price: rest.price !== null && rest.price !== undefined 
+      ? String(rest.price) 
+      : null,
+    sellerWallets: (rest.sellerWallets && typeof rest.sellerWallets === 'object' && Object.keys(rest.sellerWallets).length > 0) 
+      ? Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
+          acc[key] = String(rest.sellerWallets[key]);
+          return acc;
+        }, {})
+      : null,
+    bundleSale: rest.bundleSale !== null && rest.bundleSale !== undefined
+      ? (rest.bundleSale === true || rest.bundleSale === "true")
+      : null,
+    // Signature fields
+    signer: rest.signer !== null && rest.signer !== undefined 
+      ? String(rest.signer).toLowerCase() 
+      : null,
+    signature: rest.signature !== null && rest.signature !== undefined 
+      ? String(rest.signature) 
+      : null,
+  };
+  
+  return base;
+}
+
+/**
+ * Calculate the expected hash for a transaction
+ */
+export async function calculateTransactionHash(transaction: any): Promise<string> {
+  const hashable = hashableTransaction(transaction);
+  return await hashObject(hashable);
+}
+</file>
 
 <file path="docs/DOMAIN_SETUP.md">
 # Setting Up Explorer Domain
@@ -995,77 +1162,6 @@ export default mount(App, {
 1. Understand the feature request.
 2. Review Explorer docs to capture domain context.
 3. Only read or edit files under `explorer/` unless instructed otherwise.
-</file>
-
-<file path="explorer-nginx.conf">
-# Nginx configuration for Explorer
-# This file should be placed in /etc/nginx/sites-available/ or included in your nginx config
-
-# Explorer server block
-server {
-    listen 80;
-    server_name nft.nomin.foundation;
-
-    # Explorer API routes (must come before / location)
-    location /api/explorer {
-        proxy_pass http://localhost:4175;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # Increase timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-
-    # Health check
-    location /health {
-        proxy_pass http://localhost:4175/health;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    # Static files and SPA routes
-    location / {
-        proxy_pass http://localhost:4175;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # Increase timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-
-}
-
-# Optional: HTTPS configuration (uncomment after SSL certificate setup)
-# server {
-#     listen 443 ssl http2;
-#     server_name nft.nomin.foundation;
-#
-#     ssl_certificate /path/to/ssl/cert.pem;
-#     ssl_certificate_key /path/to/ssl/key.pem;
-#
-#     # Same location blocks as above
-#     # ...
-#
-#     # Redirect HTTP to HTTPS
-#     # location / {
-#     #     return 301 https://$server_name$request_uri;
-#     # }
-# }
-
-# Redirect HTTP to HTTPS (uncomment after SSL setup)
-# server {
-#     listen 80;
-#     server_name nft.nomin.foundation;
-#     return 301 https://$server_name$request_uri;
-# }
 </file>
 
 <file path="orchestrate">
@@ -2606,6 +2702,77 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 CMD ["tsx", "server/index.ts"]
 </file>
 
+<file path="explorer-nginx.conf">
+# Nginx configuration for Explorer
+# This file should be placed in /etc/nginx/sites-available/ or included in your nginx config
+
+# Explorer server block
+server {
+    listen 80;
+    server_name nft.nomin.foundation www.nomin.space;
+
+    # Explorer API routes (must come before / location)
+    location /api/explorer {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Increase timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health check
+    location /health {
+        proxy_pass http://localhost:4175/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Static files and SPA routes
+    location / {
+        proxy_pass http://localhost:4175;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Increase timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+}
+
+# Optional: HTTPS configuration (uncomment after SSL certificate setup)
+# server {
+#     listen 443 ssl http2;
+#     server_name nft.nomin.foundation;
+#
+#     ssl_certificate /path/to/ssl/cert.pem;
+#     ssl_certificate_key /path/to/ssl/key.pem;
+#
+#     # Same location blocks as above
+#     # ...
+#
+#     # Redirect HTTP to HTTPS
+#     # location / {
+#     #     return 301 https://$server_name$request_uri;
+#     # }
+# }
+
+# Redirect HTTP to HTTPS (uncomment after SSL setup)
+# server {
+#     listen 80;
+#     server_name nft.nomin.foundation;
+#     return 301 https://$server_name$request_uri;
+# }
+</file>
+
 <file path="LOCAL_SETUP.md">
 # Local Development Setup
 
@@ -2850,238 +3017,6 @@ export default defineConfig(({ mode }) => {
 });
 </file>
 
-<file path="src/lib/components/PartsList.svelte">
-<script lang="ts">
-  import type { ExplorerPart, Pagination, StoreInfo } from "../types";
-  import { formatAddress } from "../utils/format";
-
-  export let parts: ExplorerPart[] = [];
-  export let pagination: Pagination | null = null;
-  export let stores: StoreInfo[] = [];
-
-  // Use the exact same function as NetworkPage's Visit button
-  function getStoreFrontendUrl(baseUrl: string): string {
-    console.log("[PartsList.getStoreFrontendUrl] Called with baseUrl:", baseUrl);
-    
-    try {
-      const url = new URL(baseUrl);
-      const hostname = url.hostname;
-      const protocol = url.protocol;
-      
-      console.log("[PartsList.getStoreFrontendUrl] Parsed URL - hostname:", hostname, "protocol:", protocol);
-      
-      // For localhost, use port 5173 for frontend (standard Vite dev port)
-      if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        const result = `${protocol}//${hostname}:5173`;
-        console.log("[PartsList.getStoreFrontendUrl] Localhost detected, returning:", result);
-        return result;
-      }
-      
-      // For production, remove /api/explorer path and use base domain
-      const result = baseUrl.replace(/\/api\/explorer.*$/, "");
-      console.log("[PartsList.getStoreFrontendUrl] Production URL, returning:", result);
-      return result;
-    } catch (error) {
-      console.log("[PartsList.getStoreFrontendUrl] URL parsing failed, trying regex. Error:", error);
-      // Fallback: try regex extraction
-      const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
-      if (match) {
-        const base = match[1];
-        console.log("[PartsList.getStoreFrontendUrl] Regex match found:", base);
-        if (base.includes('localhost')) {
-          const result = base.replace(/:(\d+)/, ':5173');
-          console.log("[PartsList.getStoreFrontendUrl] Localhost in regex, returning:", result);
-          return result;
-        }
-        console.log("[PartsList.getStoreFrontendUrl] Returning regex base:", base);
-        return base;
-      }
-      console.log("[PartsList.getStoreFrontendUrl] All fallbacks failed, returning original baseUrl:", baseUrl);
-      return baseUrl;
-    }
-  }
-
-  function getPartLink(part: ExplorerPart): string {
-    console.log("[PartsList.getPartLink] Called for part:", {
-      partId: part._id,
-      partStoreId: part.storeId, // This part's store ID
-      storeName: part.storeName,
-      storesLength: stores.length,
-      availableStoreIds: stores.map(s => s.id) // All available store IDs (for debugging)
-    });
-    
-    // Get the store's baseUrl from stores array using part's storeId
-    // Same logic as NetworkPage's Visit button
-    if (part.storeId && stores.length > 0) {
-      console.log("[PartsList.getPartLink] Looking up store with storeId:", part.storeId);
-      const store = stores.find(s => s.id === part.storeId);
-      if (store) {
-        console.log("[PartsList.getPartLink] Store found:", {
-          id: store.id,
-          name: store.name,
-          baseUrl: store.baseUrl
-        });
-        if (store.baseUrl) {
-          // Use the same function as NetworkPage's Visit button to get frontend URL
-          const frontendUrl = getStoreFrontendUrl(store.baseUrl);
-          const link = `${frontendUrl}/part/${encodeURIComponent(part._id)}`;
-          console.log("[PartsList.getPartLink] Generated link:", link, "from store baseUrl:", store.baseUrl);
-          return link;
-        } else {
-          console.error("[PartsList.getPartLink] Store has no baseUrl!");
-        }
-      } else {
-        console.error("[PartsList.getPartLink] Store not found! Available stores:", stores.map(s => ({ id: s.id, name: s.name })));
-      }
-    } else {
-      if (!part.storeId) {
-        console.warn("[PartsList.getPartLink] Part has no storeId");
-      }
-      if (stores.length === 0) {
-        console.warn("[PartsList.getPartLink] Stores array is empty!");
-      }
-    }
-    
-    // Fallback: no link if store not found
-    console.log("[PartsList.getPartLink] Returning fallback '#'");
-    return "#";
-  }
-
-  $: rangeStart = pagination && pagination.total > 0 ? pagination.skip + 1 : parts.length ? 1 : 0;
-  $: rangeEnd = pagination && pagination.total > 0
-    ? Math.min(pagination.skip + pagination.limit, pagination.total)
-    : parts.length;
-</script>
-
-<section class="card {parts.length ? 'table-card' : ''}">
-  <h3>Parts in Transaction</h3>
-  {#if !parts.length}
-    <p class="empty">No parts found.</p>
-  {:else}
-    {#if pagination}
-      <div class="summary">
-        Showing {rangeStart}-{rangeEnd} of {pagination.total}
-      </div>
-    {/if}
-    <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>Part Hash</th>
-            <th>Part Number</th>
-            <th>Owner</th>
-            <th>Store</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each parts as part}
-            <tr>
-              <td>
-                {#if part.storeId}
-                  <a
-                    href={getPartLink(part)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="part-link"
-                  >
-                    {formatAddress(part._id)}
-                  </a>
-                {:else}
-                  {formatAddress(part._id)}
-                {/if}
-              </td>
-              <td>{part.part_no}</td>
-              <td>{formatAddress(part.owner)}</td>
-              <td>{part.storeName ?? "—"}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-</section>
-
-<style>
-  .card {
-    background: var(--card-bg);
-    border-radius: 1rem;
-    border: 1px solid var(--card-border);
-    padding: 1.25rem 1.5rem;
-    box-shadow: 0 18px 40px var(--card-shadow);
-  }
-
-  .table-card {
-    padding: 0;
-    overflow: hidden;
-  }
-
-  .card h3 {
-    margin: 0;
-    padding-bottom: 0.75rem;
-    font-size: 1.1rem;
-    color: var(--text-primary);
-  }
-
-  .table-card h3 {
-    padding: 1.25rem 1.5rem 0.75rem;
-  }
-
-  .summary {
-    padding: 0 1.5rem 0.5rem;
-    font-size: 0.85rem;
-    color: var(--text-muted);
-  }
-
-  .table-wrapper {
-    overflow-x: auto;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 500px;
-  }
-
-  thead {
-    background: var(--table-header-bg);
-  }
-
-  th {
-    text-align: left;
-    padding: 0.75rem 1rem;
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-label);
-  }
-
-  td {
-    padding: 0.9rem 1rem;
-    font-size: 0.9rem;
-    color: var(--text-primary);
-    border-top: 1px solid var(--card-border);
-  }
-
-  tr:nth-child(odd) {
-    background: var(--table-row-alt);
-  }
-
-  .empty {
-    margin: 0;
-    color: var(--text-muted);
-  }
-
-  .part-link {
-    color: var(--accent);
-    text-decoration: none;
-  }
-
-  .part-link:hover {
-    text-decoration: underline;
-  }
-</style>
-</file>
-
 <file path="src/lib/components/SearchPanel.svelte">
 <script lang="ts">
   import type { StoreInfo } from "../types";
@@ -3234,282 +3169,6 @@ export default defineConfig(({ mode }) => {
     font-size: 0.95rem;
   }
 </style>
-</file>
-
-<file path="src/lib/utils/hash.ts">
-/**
- * Client-side hash calculation utilities
- * Ported from backend/utils/hash.js for transaction verification
- * 
- * IMPORTANT: This must match backend/utils/hash.js exactly!
- */
-
-/**
- * Deterministic stringify function for consistent hashing.
- * Handles object key sorting, Date serialization, null/undefined normalization
- */
-function deterministicStringify(obj: any): string {
-  if (obj === null) {
-    return "null";
-  }
-  if (obj === undefined) {
-    return "undefined";
-  }
-  
-  // Handle primitives
-  if (typeof obj !== "object") {
-    return JSON.stringify(obj);
-  }
-  
-  // Handle Date objects
-  if (obj instanceof Date) {
-    return JSON.stringify(obj.toISOString());
-  }
-  
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    const items = obj.map(item => deterministicStringify(item));
-    return `[${items.join(",")}]`;
-  }
-  
-  // Handle objects - sort keys for consistency
-  const sortedKeys = Object.keys(obj).sort();
-  const pairs = sortedKeys.map(key => {
-    const value = obj[key];
-    // Skip undefined values to maintain consistency
-    if (value === undefined) {
-      return null;
-    }
-    const serializedValue = deterministicStringify(value);
-    return `${JSON.stringify(key)}:${serializedValue}`;
-  }).filter((pair): pair is string => pair !== null);
-  
-  return `{${pairs.join(",")}}`;
-}
-
-/**
- * Hash an object deterministically using SHA-256
- */
-async function hashObject(obj: any): Promise<string> {
-  const serialized = deterministicStringify(obj);
-  const encoder = new TextEncoder();
-  const data = encoder.encode(serialized);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-/**
- * Create a hashable representation of a Transaction for hashing.
- * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
- * 
- * Handles all transaction types:
- * - MINT
- * - LISTING_CREATE
- * - LISTING_CANCEL
- * - NFT_BUY
- * - GIFT_CREATE
- * - GIFT_CLAIM
- * - GIFT_REFUSE
- * - GIFT_CANCEL
- * 
- * Excludes _id and arweaveTxId (since _id will be the hash itself).
- * Includes signer and signature fields if present.
- */
-function hashableTransaction(transaction: any): any {
-  // Exclude technical metadata that should not be in hash
-  const { _id, arweaveTxId, previous_arweave_tx, ...rest } = transaction;
-  const type = String(rest.type || "");
-  
-  // Helper to normalize empty strings to null for optional fields
-  const normalizeOptional = (value: any): string | null => {
-    if (value === null || value === undefined || value === "") {
-      return null;
-    }
-    return String(value);
-  };
-  
-  // Base fields present in all transaction types
-  const base: any = {
-    type,
-    transaction_number: Number(rest.transaction_number || 0),
-    timestamp: rest.timestamp instanceof Date 
-      ? rest.timestamp 
-      : new Date(rest.timestamp || Date.now()),
-  };
-  
-  // Type-specific field handling - MUST MATCH BACKEND EXACTLY
-  switch (type) {
-    case "MINT": {
-      const minter = String(rest.buyer || rest.seller || rest.creator || "").toLowerCase();
-      base.nftId = String(rest.nftId || "");
-      base.quantity = Number(rest.quantity || 0);
-      base.buyer = minter;
-      base.seller = minter;
-      // Normalize empty strings to null for optional fields
-      base.chainTx = normalizeOptional(rest.chainTx);
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "LISTING_CREATE": {
-      // Normalize empty strings to null for optional fields
-      base.listingId = normalizeOptional(rest.listingId);
-      base.nftId = String(rest.nftId || "");
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.price = String(rest.price || "");
-      base.currency = String(rest.currency || "");
-      if (rest.sellerWallets && typeof rest.sellerWallets === 'object') {
-        // Sort wallet keys for deterministic hashing
-        base.sellerWallets = Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
-          acc[key] = String(rest.sellerWallets[key]);
-          return acc;
-        }, {} as any);
-      }
-      base.bundleSale = rest.bundleSale === true || rest.bundleSale === "true";
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "LISTING_CANCEL": {
-      // Normalize empty strings to null for optional fields
-      base.listingId = normalizeOptional(rest.listingId);
-      base.seller = String(rest.seller || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "NFT_BUY": {
-      // Normalize empty strings to null for optional fields (explorer API converts null to "")
-      base.listingId = normalizeOptional(rest.listingId);
-      base.reservationId = normalizeOptional(rest.reservationId);
-      base.nftId = String(rest.nftId || "");
-      base.buyer = String(rest.buyer || "").toLowerCase();
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      base.chainTx = normalizeOptional(rest.chainTx);
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CREATE": {
-      // Normalize empty strings to null for optional fields
-      base.giftId = normalizeOptional(rest.giftId);
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CLAIM": {
-      // Normalize empty strings to null for optional fields
-      base.giftId = normalizeOptional(rest.giftId);
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      // Normalize empty strings to null for optional fields
-      base.chainTx = normalizeOptional(rest.chainTx);
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_REFUSE": {
-      // Normalize empty strings to null for optional fields
-      base.giftId = normalizeOptional(rest.giftId);
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT_CANCEL": {
-      // Normalize empty strings to null for optional fields
-      base.giftId = normalizeOptional(rest.giftId);
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      // Include signature fields
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    // Legacy types for backward compatibility
-    case "TRANSACTION": {
-      // Legacy TRANSACTION type - map to NFT_BUY structure
-      // Normalize empty strings to null for optional fields
-      base.listingId = normalizeOptional(rest.listingId);
-      base.reservationId = normalizeOptional(rest.reservationId);
-      base.nftId = String(rest.nftId || "");
-      base.buyer = String(rest.buyer || "").toLowerCase();
-      base.seller = String(rest.seller || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      // Normalize empty strings to null for optional fields
-      base.chainTx = normalizeOptional(rest.chainTx);
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    case "GIFT": {
-      // Legacy GIFT type - map to GIFT_CLAIM structure
-      base.nftId = String(rest.nftId || "");
-      // Explorer API maps giver->seller, receiver->buyer - reconstruct original fields
-      base.giver = String(rest.giver || rest.seller || "").toLowerCase();
-      base.receiver = String(rest.receiver || rest.buyer || "").toLowerCase();
-      base.quantity = Number(rest.quantity || 0);
-      // Normalize empty strings to null for optional fields
-      base.chainTx = normalizeOptional(rest.chainTx);
-      base.currency = String(rest.currency || "ETH");
-      base.amount = String(rest.amount || "0");
-      if (rest.signer) base.signer = String(rest.signer).toLowerCase();
-      if (rest.signature) base.signature = String(rest.signature);
-      break;
-    }
-    
-    default:
-      throw new Error(`Unknown transaction type: ${type}`);
-  }
-  
-  return base;
-}
-
-/**
- * Calculate the expected hash for a transaction
- */
-export async function calculateTransactionHash(transaction: any): Promise<string> {
-  const hashable = hashableTransaction(transaction);
-  return await hashObject(hashable);
-}
 </file>
 
 <file path="index.html">
@@ -4369,6 +4028,162 @@ A: Our database maintains a copy of all transactions. Arweave serves as permanen
 **Built on cryptographic proof, not promises. Verify everything yourself.**
 </file>
 
+<file path="src/lib/components/PartsList.svelte">
+<script lang="ts">
+  import type { ExplorerPart, Pagination, StoreInfo } from "../types";
+  import { formatAddress } from "../utils/format";
+  import { createEventDispatcher } from "svelte";
+
+  export let parts: ExplorerPart[] = [];
+  export let pagination: Pagination | null = null;
+
+  const dispatch = createEventDispatcher<{
+    search: { query: string };
+  }>();
+
+  function handlePartHashClick(partHash: string, event: MouseEvent) {
+    event.preventDefault();
+    dispatch("search", { query: partHash });
+  }
+
+  $: rangeStart = pagination && pagination.total > 0 ? pagination.skip + 1 : parts.length ? 1 : 0;
+  $: rangeEnd = pagination && pagination.total > 0
+    ? Math.min(pagination.skip + pagination.limit, pagination.total)
+    : parts.length;
+</script>
+
+<section class="card {parts.length ? 'table-card' : ''}">
+  <h3>Parts in Transaction</h3>
+  {#if !parts.length}
+    <p class="empty">No parts found.</p>
+  {:else}
+    {#if pagination}
+      <div class="summary">
+        Showing {rangeStart}-{rangeEnd} of {pagination.total}
+      </div>
+    {/if}
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Part Hash</th>
+            <th>Part Number</th>
+            <th>Owner</th>
+            <th>Store</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each parts as part}
+            <tr>
+              <td>
+                <button
+                  type="button"
+                  class="hash-link"
+                  on:click={(e) => handlePartHashClick(part._id, e)}
+                  title="Search for this part hash"
+                >
+                  {formatAddress(part._id)}
+                </button>
+              </td>
+              <td>{part.part_no}</td>
+              <td>{formatAddress(part.owner)}</td>
+              <td>{part.storeName ?? "—"}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</section>
+
+<style>
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+  }
+
+  .table-card {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .card h3 {
+    margin: 0;
+    padding-bottom: 0.75rem;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .table-card h3 {
+    padding: 1.25rem 1.5rem 0.75rem;
+  }
+
+  .summary {
+    padding: 0 1.5rem 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 500px;
+  }
+
+  thead {
+    background: var(--table-header-bg);
+  }
+
+  th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-label);
+  }
+
+  td {
+    padding: 0.9rem 1rem;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    border-top: 1px solid var(--card-border);
+  }
+
+  tr:nth-child(odd) {
+    background: var(--table-row-alt);
+  }
+
+  .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .hash-link {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    transition: text-decoration 0.2s ease;
+  }
+
+  .hash-link:hover {
+    text-decoration: underline;
+  }
+</style>
+</file>
+
 <file path="src/lib/components/VerificationPage.svelte">
 <script lang="ts">
   // This component displays the verification and Arweave documentation
@@ -4883,6 +4698,212 @@ Transaction #1  → Previous: null (first transaction)`}</pre>
 </style>
 </file>
 
+<file path="src/lib/utils/hash.ts">
+/**
+ * Client-side hash calculation utilities
+ * Ported from backend/utils/hash.js for transaction verification
+ * 
+ * IMPORTANT: This must match backend/utils/hash.js exactly!
+ * 
+ * UPDATED: Now uses unified structure for all transaction types (standardized)
+ */
+
+/**
+ * Deterministic stringify function for consistent hashing.
+ * Handles object key sorting, Date serialization, null/undefined normalization
+ */
+function deterministicStringify(obj: any): string {
+  if (obj === null) {
+    return "null";
+  }
+  if (obj === undefined) {
+    return "undefined";
+  }
+  
+  // Handle primitives
+  if (typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  
+  // Handle Date objects
+  if (obj instanceof Date) {
+    return JSON.stringify(obj.toISOString());
+  }
+  
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    const items = obj.map(item => deterministicStringify(item));
+    return `[${items.join(",")}]`;
+  }
+  
+  // Handle objects - sort keys for consistency
+  const sortedKeys = Object.keys(obj).sort();
+  const pairs = sortedKeys.map(key => {
+    const value = obj[key];
+    // Skip undefined values to maintain consistency
+    if (value === undefined) {
+      return null;
+    }
+    const serializedValue = deterministicStringify(value);
+    return `${JSON.stringify(key)}:${serializedValue}`;
+  }).filter((pair): pair is string => pair !== null);
+  
+  return `{${pairs.join(",")}}`;
+}
+
+/**
+ * Hash an object deterministically using SHA-256
+ */
+async function hashObject(obj: any): Promise<string> {
+  const serialized = deterministicStringify(obj);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(serialized);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Create a hashable representation of a Transaction for hashing.
+ * MUST MATCH backend/utils/hash.js hashableTransaction() exactly!
+ * 
+ * All transactions now have the same structure with consistent fields.
+ * Excludes technical metadata (_id, arweaveTxId, previous_arweave_tx).
+ * Excludes imageUrl (for display only, not part of hash).
+ * 
+ * Handles all transaction types:
+ * - MINT
+ * - LISTING_CREATE
+ * - LISTING_CANCEL
+ * - NFT_BUY
+ * - GIFT_CREATE
+ * - GIFT_CLAIM
+ * - GIFT_REFUSE
+ * - GIFT_CANCEL
+ * - UPLOAD
+ */
+function hashableTransaction(transaction: any): any {
+  // Exclude technical metadata that should not be in hash
+  const { _id, arweaveTxId, previous_arweave_tx, imageUrl, ...rest } = transaction;
+  
+  // Normalize all fields consistently - all transactions now have the same structure
+  const base: any = {
+    type: String(rest.type || ""),
+    transaction_number: Number(rest.transaction_number || 0),
+    timestamp: rest.timestamp instanceof Date 
+      ? rest.timestamp 
+      : new Date(rest.timestamp || Date.now()),
+    // Entity references
+    listingId: rest.listingId !== null && rest.listingId !== undefined 
+      ? String(rest.listingId) 
+      : null,
+    reservationId: rest.reservationId !== null && rest.reservationId !== undefined 
+      ? String(rest.reservationId) 
+      : null,
+    giftId: rest.giftId !== null && rest.giftId !== undefined 
+      ? String(rest.giftId) 
+      : null,
+    // NFT/Part fields
+    nftId: rest.nftId !== null && rest.nftId !== undefined 
+      ? String(rest.nftId) 
+      : null,
+    quantity: Number(rest.quantity || 0),
+    // Party fields
+    buyer: rest.buyer !== null && rest.buyer !== undefined 
+      ? String(rest.buyer).toLowerCase() 
+      : null,
+    seller: rest.seller !== null && rest.seller !== undefined 
+      ? String(rest.seller).toLowerCase() 
+      : null,
+    giver: rest.giver !== null && rest.giver !== undefined 
+      ? String(rest.giver).toLowerCase() 
+      : null,
+    receiver: rest.receiver !== null && rest.receiver !== undefined 
+      ? String(rest.receiver).toLowerCase() 
+      : null,
+    // Chain transaction fields
+    // Normalize empty strings to null for consistency
+    chainTx: (rest.chainTx !== null && rest.chainTx !== undefined && String(rest.chainTx).trim() !== "") 
+      ? String(rest.chainTx) 
+      : null,
+    currency: (rest.currency !== null && rest.currency !== undefined && String(rest.currency).trim() !== "") 
+      ? String(rest.currency) 
+      : null,
+    amount: (rest.amount !== null && rest.amount !== undefined && String(rest.amount).trim() !== "") 
+      ? String(rest.amount) 
+      : null,
+    // Listing-specific fields
+    price: rest.price !== null && rest.price !== undefined 
+      ? String(rest.price) 
+      : null,
+    sellerWallets: (rest.sellerWallets && typeof rest.sellerWallets === 'object' && Object.keys(rest.sellerWallets).length > 0) 
+      ? Object.keys(rest.sellerWallets).sort().reduce((acc: any, key: string) => {
+          acc[key] = String(rest.sellerWallets[key]);
+          return acc;
+        }, {})
+      : null,
+    bundleSale: rest.bundleSale !== null && rest.bundleSale !== undefined
+      ? (rest.bundleSale === true || rest.bundleSale === "true")
+      : null,
+    // Upload-specific fields
+    uploadId: rest.uploadId !== null && rest.uploadId !== undefined 
+      ? String(rest.uploadId) 
+      : null,
+    uploadedimageurl: (rest.uploadedimageurl !== null && rest.uploadedimageurl !== undefined && String(rest.uploadedimageurl).trim() !== "") 
+      ? String(rest.uploadedimageurl) 
+      : null,
+    uploadedimagedescription: (rest.uploadedimagedescription !== null && rest.uploadedimagedescription !== undefined && String(rest.uploadedimagedescription).trim() !== "") 
+      ? String(rest.uploadedimagedescription) 
+      : null,
+    uploadedimagename: (rest.uploadedimagename !== null && rest.uploadedimagename !== undefined && String(rest.uploadedimagename).trim() !== "") 
+      ? String(rest.uploadedimagename) 
+      : null,
+    // Verification fields (for first upload)
+    isVerificationConfirmation: rest.isVerificationConfirmation !== null && rest.isVerificationConfirmation !== undefined
+      ? (rest.isVerificationConfirmation === true || rest.isVerificationConfirmation === "true")
+      : null,
+    verifiedUserUsername: (rest.verifiedUserUsername !== null && rest.verifiedUserUsername !== undefined && String(rest.verifiedUserUsername).trim() !== "") 
+      ? String(rest.verifiedUserUsername) 
+      : null,
+    verifiedUserBio: (rest.verifiedUserBio !== null && rest.verifiedUserBio !== undefined && String(rest.verifiedUserBio).trim() !== "") 
+      ? String(rest.verifiedUserBio) 
+      : null,
+    verifiedUserEmail: (rest.verifiedUserEmail !== null && rest.verifiedUserEmail !== undefined && String(rest.verifiedUserEmail).trim() !== "") 
+      ? String(rest.verifiedUserEmail) 
+      : null,
+    verifiedUserFullName: (rest.verifiedUserFullName !== null && rest.verifiedUserFullName !== undefined && String(rest.verifiedUserFullName).trim() !== "") 
+      ? String(rest.verifiedUserFullName) 
+      : null,
+    verifiedUserCountry: (rest.verifiedUserCountry !== null && rest.verifiedUserCountry !== undefined && String(rest.verifiedUserCountry).trim() !== "") 
+      ? String(rest.verifiedUserCountry) 
+      : null,
+    verifiedUserCity: (rest.verifiedUserCity !== null && rest.verifiedUserCity !== undefined && String(rest.verifiedUserCity).trim() !== "") 
+      ? String(rest.verifiedUserCity) 
+      : null,
+    verifiedUserPhysicalAddress: (rest.verifiedUserPhysicalAddress !== null && rest.verifiedUserPhysicalAddress !== undefined && String(rest.verifiedUserPhysicalAddress).trim() !== "") 
+      ? String(rest.verifiedUserPhysicalAddress) 
+      : null,
+    // Signature fields
+    signer: rest.signer !== null && rest.signer !== undefined 
+      ? String(rest.signer).toLowerCase() 
+      : null,
+    signature: rest.signature !== null && rest.signature !== undefined 
+      ? String(rest.signature) 
+      : null,
+  };
+  
+  return base;
+}
+
+/**
+ * Calculate the expected hash for a transaction
+ */
+export async function calculateTransactionHash(transaction: any): Promise<string> {
+  const hashable = hashableTransaction(transaction);
+  return await hashObject(hashable);
+}
+</file>
+
 <file path="src/lib/utils/storeLinks.ts">
 /**
  * Store link utilities
@@ -4975,6 +4996,101 @@ export function getArweaveTxLink(arweaveTxId: string): string {
   const explorer = import.meta.env.VITE_ARWEAVE_EXPLORER || 'https://viewblock.io/arweave/tx';
   return `${explorer.replace(/\/$/, '')}/${arweaveTxId}`;
 }
+</file>
+
+<file path="README.md">
+# Explorer
+
+Standalone Explorer application for searching parts and transactions across the Nomin network.
+
+## Structure
+
+- **Frontend**: Svelte + Vite application in `src/`
+- **Backend**: Node.js + Express API server in `server/`
+- **Docs**: Integration guides and API references in `docs/`
+
+## Goals
+
+- Discover parts by hash
+- Look up completed transactions by their transaction id or on-chain hash
+- Enumerate partial transactions for a part or a chain transaction
+- Provide a read-only experience that mirrors the main store data model
+
+## Getting Started
+
+### Prerequisites
+
+See [docs/INSTALLATION.md](./docs/INSTALLATION.md) for complete installation instructions.
+
+**Quick checklist:**
+- Docker (for production) or Node.js 20+ (for development)
+- Git (for cloning repository)
+
+### Installation
+
+```bash
+cd explorer
+npm install
+```
+
+### Development
+
+Run both frontend and backend together:
+```bash
+npm run dev
+```
+
+Or run them separately:
+```bash
+npm run dev:server    # Backend only (port 4176)
+npm run dev:frontend  # Frontend only (port 4175)
+```
+
+### Environment Variables
+
+Create a `.env` file in the repo root:
+
+```env
+EXPLORER_API_PORT=4176
+NODE_ENV=development
+```
+
+For production, use `.env.production`.
+
+### Scripts
+
+- `npm run dev` - Run both backend and frontend in development mode
+- `npm run dev:server` - Run backend only in watch mode
+- `npm run dev:frontend` - Run frontend only
+- `npm run build` - Build frontend for production
+- `npm run preview` - Preview built frontend
+- `npm run start:server` - Run backend in production mode
+- `npm run test` - Run Vitest tests
+
+### Backend API
+
+The backend server runs on port 4176 (configurable via `EXPLORER_API_PORT`) and exposes routes under `/api/explorer`:
+
+- `GET /api/explorer/parts/:partHash`
+- `GET /api/explorer/transactions/id/:txId`
+- `GET /api/explorer/transactions/chain/:chainTx`
+- `GET /api/explorer/partial-transactions/part/:partHash`
+- `GET /api/explorer/partial-transactions/id/:txId`
+- `GET /api/explorer/partial-transactions/chain/:chainTx`
+
+See `server/README.md` for more details.
+
+### Development Proxy
+
+The Vite dev server automatically proxies:
+- `/api/explorer/**` → Explorer backend (localhost:4176)
+- `/api/**` (excluding `/api/explorer`) → Main store backend (localhost:3000)
+
+### AI Workflows
+
+- Run `./orchestrate "Your task"` for AI-assisted development
+- Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks
+- For Docker deployment see `docs/running.md`
 </file>
 
 <file path="src/lib/utils/verification.ts">
@@ -5158,36 +5274,29 @@ function compareTransactionFields(local: any, arweave: any): string[] {
   const normalizedLocal = normalizeTransactionForComparison(local);
   
   // Fields to compare (excluding transactionId and previous_arweave_tx which are metadata)
+  // All transactions now have the same structure, so we compare all fields consistently
   const fieldsToCompare = [
     "type",
     "transaction_number",
+    "listingId",
+    "reservationId",
+    "giftId",
     "nftId",
     "quantity",
+    "buyer",
+    "seller",
+    "giver",
+    "receiver",
     "chainTx",
     "currency",
     "amount",
+    "price",
+    "sellerWallets",
+    "bundleSale",
     "timestamp",
-    "signer",    // Added for signature verification
-    "signature", // Added for signature verification
+    "signer",
+    "signature",
   ];
-  
-  // Add type-specific fields
-  if (normalizedLocal.type === "GIFT" || normalizedLocal.type === "GIFT_CREATE" || normalizedLocal.type === "GIFT_CLAIM" || normalizedLocal.type === "GIFT_REFUSE" || normalizedLocal.type === "GIFT_CANCEL") {
-    fieldsToCompare.push("giver", "receiver");
-    if (normalizedLocal.giftId) fieldsToCompare.push("giftId");
-  } else if (normalizedLocal.type === "MINT") {
-    fieldsToCompare.push("buyer", "seller");
-  } else if (normalizedLocal.type === "LISTING_CREATE") {
-    fieldsToCompare.push("seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.price) fieldsToCompare.push("price");
-    if (normalizedLocal.sellerWallets) fieldsToCompare.push("sellerWallets");
-    if (normalizedLocal.bundleSale !== undefined) fieldsToCompare.push("bundleSale");
-  } else {
-    fieldsToCompare.push("buyer", "seller");
-    if (normalizedLocal.listingId) fieldsToCompare.push("listingId");
-    if (normalizedLocal.reservationId) fieldsToCompare.push("reservationId");
-  }
   
   for (const field of fieldsToCompare) {
     const localValue = normalizeValue(normalizedLocal[field]);
@@ -5266,7 +5375,8 @@ export async function verifyTransaction(
     
     // Step 2: Verify transaction structure
     updateStep("Verifying transaction structure");
-    const hasRequiredFields = transaction.type && transaction.nftId && transaction.quantity !== undefined;
+    // All transactions now have the same structure - just check for type
+    const hasRequiredFields = !!(transaction.type);
     checks.push({
       name: "Transaction Structure",
       passed: hasRequiredFields,
@@ -5400,101 +5510,6 @@ export async function verifyTransaction(
     };
   }
 }
-</file>
-
-<file path="README.md">
-# Explorer
-
-Standalone Explorer application for searching parts and transactions across the Nomin network.
-
-## Structure
-
-- **Frontend**: Svelte + Vite application in `src/`
-- **Backend**: Node.js + Express API server in `server/`
-- **Docs**: Integration guides and API references in `docs/`
-
-## Goals
-
-- Discover parts by hash
-- Look up completed transactions by their transaction id or on-chain hash
-- Enumerate partial transactions for a part or a chain transaction
-- Provide a read-only experience that mirrors the main store data model
-
-## Getting Started
-
-### Prerequisites
-
-See [docs/INSTALLATION.md](./docs/INSTALLATION.md) for complete installation instructions.
-
-**Quick checklist:**
-- Docker (for production) or Node.js 20+ (for development)
-- Git (for cloning repository)
-
-### Installation
-
-```bash
-cd explorer
-npm install
-```
-
-### Development
-
-Run both frontend and backend together:
-```bash
-npm run dev
-```
-
-Or run them separately:
-```bash
-npm run dev:server    # Backend only (port 4176)
-npm run dev:frontend  # Frontend only (port 4175)
-```
-
-### Environment Variables
-
-Create a `.env` file in the repo root:
-
-```env
-EXPLORER_API_PORT=4176
-NODE_ENV=development
-```
-
-For production, use `.env.production`.
-
-### Scripts
-
-- `npm run dev` - Run both backend and frontend in development mode
-- `npm run dev:server` - Run backend only in watch mode
-- `npm run dev:frontend` - Run frontend only
-- `npm run build` - Build frontend for production
-- `npm run preview` - Preview built frontend
-- `npm run start:server` - Run backend in production mode
-- `npm run test` - Run Vitest tests
-
-### Backend API
-
-The backend server runs on port 4176 (configurable via `EXPLORER_API_PORT`) and exposes routes under `/api/explorer`:
-
-- `GET /api/explorer/parts/:partHash`
-- `GET /api/explorer/transactions/id/:txId`
-- `GET /api/explorer/transactions/chain/:chainTx`
-- `GET /api/explorer/partial-transactions/part/:partHash`
-- `GET /api/explorer/partial-transactions/id/:txId`
-- `GET /api/explorer/partial-transactions/chain/:chainTx`
-
-See `server/README.md` for more details.
-
-### Development Proxy
-
-The Vite dev server automatically proxies:
-- `/api/explorer/**` → Explorer backend (localhost:4176)
-- `/api/**` (excluding `/api/explorer`) → Main store backend (localhost:3000)
-
-### AI Workflows
-
-- Run `./orchestrate "Your task"` for AI-assisted development
-- Docs live in `./docs` for backend integration, API details, running instructions, and session playbooks
-- For Docker deployment see `docs/running.md`
 </file>
 
 <file path="server/config/stores.ts">
@@ -5654,6 +5669,104 @@ export function initializeStores(): void {
 }
 </file>
 
+<file path="src/lib/types.ts">
+export type SearchMode = "part" | "transaction";
+
+export interface StoreInfo {
+  id: string;
+  name: string;
+  baseUrl: string;
+  website?: string;
+  icon?: string | null;
+}
+
+export interface ExplorerPart {
+  _id: string;
+  part_no: number;
+  parent_hash: string;
+  owner: string;
+  listing: string | null;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerNFT {
+  _id: string;
+  name: string;
+  description: string;
+  creator: string;
+  imageurl?: string;
+}
+
+export interface Pagination {
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface PartialTransaction {
+  part: string;
+  txId?: string;
+  transaction?: string;
+  from: string;
+  to: string;
+  nftId: string;
+  chainTx: string;
+  currency: string;
+  amount: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+}
+
+export interface ExplorerTransaction {
+  _id: string;
+  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
+  transaction_number?: number;
+  listingId?: string;
+  reservationId?: string;
+  buyer?: string;
+  seller?: string;
+  nftId?: string;
+  quantity?: number;
+  chainTx?: string;
+  currency?: string;
+  amount?: string;
+  arweaveTxId?: string;
+  timestamp: string;
+  storeId?: string;
+  storeName?: string;
+  // Signature fields (for verification)
+  signer?: string;
+  signature?: string;
+  // Gift-specific fields
+  giver?: string;
+  receiver?: string;
+  giftId?: string;
+  // Listing-specific fields
+  price?: string;
+  sellerWallets?: Record<string, string>;
+  bundleSale?: boolean;
+}
+
+export type ExplorerResult =
+  | {
+      kind: "part";
+      part: ExplorerPart;
+      nft: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination;
+    }
+  | {
+      kind: "transaction";
+      transaction: ExplorerTransaction;
+      parts?: ExplorerPart[];
+      nft?: ExplorerNFT | null;
+      partialTransactions: PartialTransaction[];
+      pagination: Pagination | null;
+    };
+</file>
+
 <file path="src/lib/components/NetworkPage.svelte">
 <script lang="ts">
   import { onMount } from "svelte";
@@ -5752,22 +5865,23 @@ export function initializeStores(): void {
       
       // For localhost, use port 5173 for frontend (standard Vite dev port)
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${protocol}//${hostname}:5173`;
+        return `${protocol}//${hostname}:5173/store`;
       }
       
-      // For production, remove /api/explorer path and use base domain
-      return baseUrl.replace(/\/api\/explorer.*$/, "");
+      // For production, remove /api/explorer path and use base domain + /store
+      const base = baseUrl.replace(/\/api\/explorer.*$/, "");
+      return `${base}/store`;
     } catch {
       // Fallback: try regex extraction
       const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
       if (match) {
         const base = match[1];
         if (base.includes('localhost')) {
-          return base.replace(/:(\d+)/, ':5173');
+          return base.replace(/:(\d+)/, ':5173') + '/store';
         }
-        return base;
+        return base + '/store';
       }
-      return baseUrl;
+      return baseUrl.replace(/\/api\/explorer.*$/, "") + '/store';
     }
   }
 
@@ -6183,104 +6297,6 @@ export function initializeStores(): void {
     }
   }
 </style>
-</file>
-
-<file path="src/lib/types.ts">
-export type SearchMode = "part" | "transaction";
-
-export interface StoreInfo {
-  id: string;
-  name: string;
-  baseUrl: string;
-  website?: string;
-  icon?: string | null;
-}
-
-export interface ExplorerPart {
-  _id: string;
-  part_no: number;
-  parent_hash: string;
-  owner: string;
-  listing: string | null;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerNFT {
-  _id: string;
-  name: string;
-  description: string;
-  creator: string;
-  imageurl?: string;
-}
-
-export interface Pagination {
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface PartialTransaction {
-  part: string;
-  txId?: string;
-  transaction?: string;
-  from: string;
-  to: string;
-  nftId: string;
-  chainTx: string;
-  currency: string;
-  amount: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-}
-
-export interface ExplorerTransaction {
-  _id: string;
-  type: "TRANSACTION" | "GIFT" | "MINT" | "LISTING_CREATE" | "LISTING_CANCEL" | "NFT_BUY" | "GIFT_CREATE" | "GIFT_CLAIM" | "GIFT_REFUSE" | "GIFT_CANCEL";
-  transaction_number?: number;
-  listingId?: string;
-  reservationId?: string;
-  buyer?: string;
-  seller?: string;
-  nftId?: string;
-  quantity?: number;
-  chainTx?: string;
-  currency?: string;
-  amount?: string;
-  arweaveTxId?: string;
-  timestamp: string;
-  storeId?: string;
-  storeName?: string;
-  // Signature fields (for verification)
-  signer?: string;
-  signature?: string;
-  // Gift-specific fields
-  giver?: string;
-  receiver?: string;
-  giftId?: string;
-  // Listing-specific fields
-  price?: string;
-  sellerWallets?: Record<string, string>;
-  bundleSale?: boolean;
-}
-
-export type ExplorerResult =
-  | {
-      kind: "part";
-      part: ExplorerPart;
-      nft: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination;
-    }
-  | {
-      kind: "transaction";
-      transaction: ExplorerTransaction;
-      parts?: ExplorerPart[];
-      nft?: ExplorerNFT | null;
-      partialTransactions: PartialTransaction[];
-      pagination: Pagination | null;
-    };
 </file>
 
 <file path="server/routes/explorer.ts">
@@ -7305,10 +7321,26 @@ export default router;
 <script lang="ts">
   import type { PartialTransaction, Pagination } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
+  import { createEventDispatcher } from "svelte";
 
   export let title: string;
   export let partials: PartialTransaction[] = [];
   export let pagination: Pagination | null = null;
+  export let showTransactionHash = false; // When true, show transaction hash instead of part hash
+
+  const dispatch = createEventDispatcher<{
+    search: { query: string };
+  }>();
+
+  function handleHashClick(hash: string, event: MouseEvent) {
+    event.preventDefault();
+    dispatch("search", { query: hash });
+  }
+
+  function getTransactionId(partial: PartialTransaction): string | null {
+    // Return the parent transaction ID (transaction field takes precedence over txId)
+    return partial.transaction || partial.txId || null;
+  }
 
   $: rangeStart =
     pagination && pagination.total > 0 ? pagination.skip + 1 : partials.length ? 1 : 0;
@@ -7327,11 +7359,6 @@ export default router;
   }
 
 
-  function getTransactionId(partial: PartialTransaction): string | null {
-    // Return the parent transaction ID (transaction field takes precedence over txId)
-    return partial.transaction || partial.txId || null;
-  }
-
   async function copyTransactionId(partial: PartialTransaction) {
     const txId = getTransactionId(partial);
     if (!txId) return;
@@ -7347,6 +7374,7 @@ export default router;
 
 <section class="card {partials.length ? 'table-card' : ''}">
   <h3>{title}</h3>
+  <div class="table-content">
   {#if !partials.length}
     <p class="empty">No partial transactions found.</p>
   {:else}
@@ -7359,60 +7387,94 @@ export default router;
       <table>
         <thead>
           <tr>
-            <th>Part</th>
+            <th>{showTransactionHash ? "Transaction Hash" : "Part"}</th>
             <th>From</th>
             <th>To</th>
             <th>Amount</th>
-            <th>Chain Hash</th>
+            {#if !showTransactionHash}
+              <th>Chain Hash</th>
+            {/if}
             <th>Timestamp</th>
-            <th>Store</th>
-            <th>Actions</th>
+            {#if !showTransactionHash}
+              <th>Store</th>
+              <th>Actions</th>
+            {/if}
           </tr>
         </thead>
         <tbody>
           {#each partials as partial}
             <tr>
-              <td>{formatAddress(partial.part)}</td>
+              <td>
+                {#if showTransactionHash}
+                  {@const txId = getTransactionId(partial)}
+                  {#if txId}
+                    <button
+                      type="button"
+                      class="hash-link"
+                      on:click={(e) => handleHashClick(txId, e)}
+                      title="Search for this transaction hash"
+                    >
+                      {formatAddress(txId)}
+                    </button>
+                  {:else}
+                    —
+                  {/if}
+                {:else}
+                  <button
+                    type="button"
+                    class="hash-link"
+                    on:click={(e) => handleHashClick(partial.part, e)}
+                    title="Search for this part hash"
+                  >
+                    {formatAddress(partial.part)}
+                  </button>
+                {/if}
+              </td>
               <td>{formatAddress(partial.from)}</td>
               <td>{formatAddress(partial.to)}</td>
               <td>{formatAmount(partial.amount, partial.currency)}</td>
-              <td>
-                {#if partial.chainTx}
-                  <a
-                    href={explorerLink(partial)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="tx-link"
-                  >
-                    {formatAddress(partial.chainTx, 8)}
-                  </a>
-                {:else}
-                  —
-                {/if}
-              </td>
+              {#if !showTransactionHash}
+                <td>
+                  {#if partial.chainTx}
+                    <a
+                      href={explorerLink(partial)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="tx-link"
+                    >
+                      {formatAddress(partial.chainTx, 8)}
+                    </a>
+                  {:else}
+                    —
+                  {/if}
+                </td>
+              {/if}
               <td>{formatDate(partial.timestamp)}</td>
-              <td>{partial.storeName ?? "—"}</td>
-              <td>
-                {#if getTransactionId(partial)}
-                  <button
-                    type="button"
-                    class="copy-button"
-                    on:click={() => copyTransactionId(partial)}
-                    title="Copy transaction ID"
-                    aria-label="Copy transaction ID"
-                  >
-                    📋
-                  </button>
-                {:else}
-                  —
-                {/if}
-              </td>
+              {#if !showTransactionHash}
+                <td>{partial.storeName ?? "—"}</td>
+                <td>
+                  {#if getTransactionId(partial)}
+                    <button
+                      type="button"
+                      class="copy-button"
+                      on:click={() => copyTransactionId(partial)}
+                      title="Copy transaction ID"
+                      aria-label="Copy transaction ID"
+                    >
+                      📋
+                    </button>
+                  {:else}
+                    —
+                  {/if}
+                </td>
+              {/if}
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
   {/if}
+  </div>
 </section>
 
 <style>
@@ -7422,11 +7484,18 @@ export default router;
     border: 1px solid var(--card-border);
     padding: 1.25rem 1.5rem;
     box-shadow: 0 18px 40px var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 600px;
+    max-height: 600px;
   }
 
   .table-card {
     padding: 0;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   .card h3 {
@@ -7438,6 +7507,24 @@ export default router;
 
   .table-card h3 {
     padding: 1.25rem 1.5rem 0.75rem;
+  }
+
+  .table-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .summary {
+    flex-shrink: 0;
+  }
+
+  .table-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .summary {
@@ -7453,7 +7540,7 @@ export default router;
   table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 640px;
+    min-width: 500px;
   }
 
   thead {
@@ -7462,18 +7549,20 @@ export default router;
 
   th {
     text-align: left;
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 0.5rem;
     font-size: 0.75rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-label);
+    white-space: nowrap;
   }
 
   td {
-    padding: 0.9rem 1rem;
-    font-size: 0.9rem;
+    padding: 0.9rem 0.5rem;
+    font-size: 0.85rem;
     color: var(--text-primary);
     border-top: 1px solid var(--card-border);
+    word-break: break-all;
   }
 
   tr:nth-child(odd) {
@@ -7491,6 +7580,25 @@ export default router;
   }
 
   .tx-link:hover {
+    text-decoration: underline;
+  }
+
+  .hash-link {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    transition: text-decoration 0.2s ease;
+    word-break: break-all;
+    max-width: 100%;
+    display: inline-block;
+  }
+
+  .hash-link:hover {
     text-decoration: underline;
   }
 
@@ -7512,675 +7620,6 @@ export default router;
 
   .copy-button:active {
     transform: scale(0.95);
-  }
-</style>
-</file>
-
-<file path="src/lib/components/ResultPanel.svelte">
-<script lang="ts">
-  import type { ExplorerResult, ExplorerNFT, StoreInfo } from "../types";
-  import { formatAddress, formatAmount, formatDate } from "../utils/format";
-  import PartialTable from "./PartialTable.svelte";
-  import PartsList from "./PartsList.svelte";
-  import VerificationModal from "./VerificationModal.svelte";
-  import { getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
-  import { fetchNftMetadata } from "../api";
-  import { verifyTransaction, fetchArweaveTransaction } from "../utils/verification";
-
-  import { createEventDispatcher } from "svelte";
-  
-  export let result: ExplorerResult | null = null;
-  export let stores: StoreInfo[] = [];
-  
-  const dispatch = createEventDispatcher();
-
-  let transactionNft: ExplorerNFT | null = null;
-  let verificationModalOpen = false;
-  let verificationStep = "";
-  let verificationState: "idle" | "verifying" | "verified" | "failed" = "idle";
-  let verificationError: string | null = null;
-  let verificationChecks: any[] = [];
-
-  // Reset verification state when result changes (new search)
-  $: if (result) {
-    verificationState = "idle";
-    verificationModalOpen = false;
-    verificationStep = "";
-    verificationError = null;
-    verificationChecks = [];
-  }
-
-  // Fetch NFT metadata for transaction
-  $: if (result && result.kind === "transaction") {
-    if (result.nft) {
-      transactionNft = result.nft;
-    } else if (result.transaction.nftId) {
-      // Fetch NFT metadata using transaction's nftId
-      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
-        transactionNft = nft;
-      });
-    } else if (result.parts && result.parts.length > 0) {
-      // Fallback: use first part's parent_hash
-      const firstPart = result.parts[0];
-      if (firstPart && firstPart.parent_hash) {
-        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
-          transactionNft = nft;
-        });
-      }
-    }
-  } else {
-    transactionNft = null;
-  }
-
-  async function handleVerify() {
-    if (!result || result.kind !== "transaction" || verificationState === "verifying") {
-      return;
-    }
-
-    // If already verified, just show the results
-    if (verificationState === "verified" || verificationState === "failed") {
-      verificationModalOpen = true;
-      return;
-    }
-
-    verificationModalOpen = true;
-    verificationState = "verifying";
-    verificationError = null;
-    verificationStep = "";
-    verificationChecks = [];
-
-    try {
-      const updateStep = (step: string) => {
-        verificationStep = step;
-      };
-
-      const verificationResult = await verifyTransaction(result.transaction, updateStep);
-
-      // Store checks for display
-      verificationChecks = verificationResult.checks || [];
-
-      if (verificationResult.verified) {
-        verificationState = "verified";
-        verificationStep = "";
-        verificationError = null;
-      } else {
-        verificationState = "failed";
-        verificationStep = "";
-        verificationError = verificationResult.errors.length > 0 
-          ? verificationResult.errors.join("; ")
-          : "Unknown verification error";
-      }
-    } catch (error) {
-      verificationState = "failed";
-      verificationStep = "";
-      verificationError = error instanceof Error ? error.message : String(error);
-      verificationChecks = [{
-        name: "Verification Process",
-        passed: false,
-        message: error instanceof Error ? error.message : String(error)
-      }];
-    }
-  }
-
-  let loadingPrevious = false;
-  let previousError: string | null = null;
-
-  async function handlePreviousTransaction() {
-    if (!result || result.kind !== "transaction" || !result.transaction.arweaveTxId) {
-      return;
-    }
-
-    loadingPrevious = true;
-    previousError = null;
-
-    try {
-      // Step 1: Fetch current transaction from Arweave to get previous_arweave_tx
-      const currentArweaveData = await fetchArweaveTransaction(result.transaction.arweaveTxId);
-      const previousArweaveTxId = currentArweaveData.previous_arweave_tx;
-
-      if (!previousArweaveTxId) {
-        previousError = "This is the first transaction in the chain";
-        loadingPrevious = false;
-        return;
-      }
-
-      // Step 2: Fetch previous transaction from Arweave to get its transactionId
-      const previousArweaveData = await fetchArweaveTransaction(previousArweaveTxId);
-      const previousTransactionId = previousArweaveData.transactionId;
-
-      if (!previousTransactionId) {
-        previousError = "Previous transaction does not have a transactionId";
-        loadingPrevious = false;
-        return;
-      }
-
-      // Step 3: Reset verification state for the new transaction
-      verificationState = "idle";
-      verificationModalOpen = false;
-      verificationStep = "";
-      verificationError = null;
-      verificationChecks = [];
-
-      // Step 4: Dispatch search event with the transactionId
-      dispatch("search", { query: previousTransactionId, storeId: null });
-    } catch (error) {
-      // Provide user-friendly error messages
-      let errorMessage = "Failed to fetch previous transaction";
-      if (error instanceof Error) {
-        const errorMsg = error.message;
-        // Check for JSON parsing errors
-        if (errorMsg.includes("JSON") || errorMsg.includes("parse") || errorMsg.includes("Unexpected token")) {
-          errorMessage = "Unable to read previous transaction data. The transaction may still be processing on Arweave, or the data format is invalid.";
-        } else if (errorMsg.includes("pending")) {
-          errorMessage = "Previous transaction is still pending on Arweave. Please try again in a few moments.";
-        } else {
-          errorMessage = errorMsg;
-        }
-      }
-      previousError = errorMessage;
-      console.error("Error fetching previous transaction:", error);
-    } finally {
-      loadingPrevious = false;
-    }
-  }
-</script>
-
-{#if result}
-  {#if result.kind === "part"}
-  <section class="result-section">
-    <header>
-      <h2>Part</h2>
-      <span class="badge">Part Hash</span>
-    </header>
-    <div class="grid">
-      <div class="card">
-        <h3>Part Metadata</h3>
-        <dl>
-          <div>
-            <dt>Part Hash</dt>
-            <dd>{result.part._id}</dd>
-          </div>
-          <div>
-            <dt>Part Number</dt>
-            <dd>{result.part.part_no}</dd>
-          </div>
-          <div>
-            <dt>Parent NFT</dt>
-            <dd>{result.part.parent_hash}</dd>
-          </div>
-          <div>
-            <dt>Owner</dt>
-            <dd>{formatAddress(result.part.owner)}</dd>
-          </div>
-          <div>
-            <dt>Listing</dt>
-            <dd>{result.part.listing ?? "Not Listed"}</dd>
-          </div>
-          {#if result.part.storeName}
-            <div>
-              <dt>Store</dt>
-              <dd>{result.part.storeName}</dd>
-            </div>
-          {/if}
-        </dl>
-      </div>
-      {#if result.nft}
-        <div class="card media-card">
-          <h3>NFT Metadata</h3>
-          {#if result.nft.imageurl}
-            <figure>
-              <img src={result.nft.imageurl} alt={`NFT ${result.nft.name}`} />
-              <figcaption>{result.nft.name}</figcaption>
-            </figure>
-          {:else}
-            <p class="empty">No image available.</p>
-          {/if}
-          <dl>
-            <div>
-              <dt>Name</dt>
-              <dd>{result.nft.name}</dd>
-            </div>
-            <div>
-              <dt>Description</dt>
-              <dd>{result.nft.description}</dd>
-            </div>
-            <div>
-              <dt>Creator</dt>
-              <dd>{formatAddress(result.nft.creator)}</dd>
-            </div>
-          </dl>
-        </div>
-      {/if}
-      <PartialTable
-        title="Partial Transactions"
-        partials={result.partialTransactions}
-        pagination={result.pagination}
-      />
-    </div>
-  </section>
-{:else if result.kind === "transaction"}
-  <section class="result-section">
-    <header>
-      <h2>Transaction</h2>
-      <span class="badge">Transaction Lookup</span>
-    </header>
-    <div class="grid">
-      <div class="card">
-        <div class="card-header">
-          <h3>Summary</h3>
-          {#if result.kind === "transaction"}
-            <div class="button-group">
-              <button
-                class="verify-button"
-                class:verified={verificationState === "verified"}
-                class:failed={verificationState === "failed"}
-                disabled={verificationState === "verifying"}
-                on:click={handleVerify}
-              >
-                {#if verificationState === "verified"}
-                  ✓ Transaction Verified
-                {:else if verificationState === "failed"}
-                  ✗ Verification Failed
-                {:else if verificationState === "verifying"}
-                  Verifying...
-                {:else}
-                  Verify
-                {/if}
-              </button>
-              {#if verificationState === "verified" || verificationState === "failed"}
-                <button
-                  class="learn-more-button"
-                  on:click={() => dispatch("navigateToVerification")}
-                >
-                  Learn More
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-        <dl>
-          <div>
-            <dt>Transaction ID</dt>
-            <dd>{result.transaction._id}</dd>
-          </div>
-          {#if result.transaction.transaction_number !== undefined}
-            <div>
-              <dt>Transaction Number</dt>
-              <dd>{result.transaction.transaction_number}</dd>
-            </div>
-          {/if}
-          <div>
-            <dt>Type</dt>
-            <dd>{result.transaction.type || "TRANSACTION"}</dd>
-          </div>
-          <div>
-            <dt>Chain Hash</dt>
-            <dd>
-              {#if result.transaction.chainTx}
-                <a
-                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="chain-tx-link"
-                >
-                  {formatAddress(result.transaction.chainTx)}
-                </a>
-              {:else}
-                —
-              {/if}
-            </dd>
-          </div>
-          <div>
-            <dt>Arweave Transaction</dt>
-            <dd>
-              {#if result.transaction.arweaveTxId}
-                <a
-                  href={getArweaveTxLink(result.transaction.arweaveTxId)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="chain-tx-link"
-                >
-                  {formatAddress(result.transaction.arweaveTxId)}
-                </a>
-              {:else}
-                <span class="text-muted">Not uploaded</span>
-              {/if}
-            </dd>
-          </div>
-          <div>
-            <dt>Buyer</dt>
-            <dd>{result.transaction.buyer ? formatAddress(result.transaction.buyer) : "—"}</dd>
-          </div>
-          <div>
-            <dt>Seller</dt>
-            <dd>{result.transaction.seller ? formatAddress(result.transaction.seller) : "—"}</dd>
-          </div>
-          <div>
-            <dt>Quantity</dt>
-            <dd>{result.transaction.quantity}</dd>
-          </div>
-          {#if result.transaction.type === "LISTING_CREATE"}
-            <div>
-              <dt>Price</dt>
-              <dd>{result.transaction.price ? formatAmount(result.transaction.price, "YRT") : "—"}</dd>
-            </div>
-            <div>
-              <dt>Accepted Currencies</dt>
-              <dd>
-                {#if result.transaction.sellerWallets && Object.keys(result.transaction.sellerWallets).length > 0}
-                  {Object.keys(result.transaction.sellerWallets).join(", ")}
-                {:else}
-                  —
-                {/if}
-              </dd>
-            </div>
-          {:else}
-            <div>
-              <dt>Amount</dt>
-              <dd>{formatAmount(result.transaction.amount || "", result.transaction.currency || "")}</dd>
-            </div>
-            {#if result.transaction.currency}
-              <div>
-                <dt>Currency</dt>
-                <dd>{result.transaction.currency.toUpperCase()}</dd>
-              </div>
-            {/if}
-          {/if}
-          <div>
-            <dt>Timestamp</dt>
-            <dd>{formatDate(result.transaction.timestamp)}</dd>
-          </div>
-          {#if result.transaction.storeName}
-            <div>
-              <dt>Store</dt>
-              <dd>{result.transaction.storeName}</dd>
-            </div>
-          {/if}
-        </dl>
-        {#if result.transaction.arweaveTxId}
-          <div class="button-group">
-            <button
-              class="previous-button"
-              disabled={loadingPrevious}
-              on:click={handlePreviousTransaction}
-            >
-              {#if loadingPrevious}
-                Loading...
-              {:else}
-                ← Previous Transaction
-              {/if}
-            </button>
-            {#if previousError}
-              <p class="error-text">{previousError}</p>
-            {/if}
-          </div>
-        {/if}
-      </div>
-      {#if transactionNft}
-        <div class="card media-card">
-          <h3>NFT Metadata</h3>
-          {#if transactionNft.imageurl}
-            <figure>
-              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
-              <figcaption>{transactionNft.name}</figcaption>
-            </figure>
-          {:else}
-            <p class="empty">No image available.</p>
-          {/if}
-          <dl>
-            <div>
-              <dt>Name</dt>
-              <dd>{transactionNft.name}</dd>
-            </div>
-            <div>
-              <dt>Description</dt>
-              <dd>{transactionNft.description}</dd>
-            </div>
-            <div>
-              <dt>Creator</dt>
-              <dd>{formatAddress(transactionNft.creator)}</dd>
-            </div>
-          </dl>
-        </div>
-      {/if}
-      {#if result.parts && result.parts.length > 0}
-        <PartsList parts={result.parts} pagination={result.pagination} stores={stores} />
-      {:else}
-        <div class="card note-card">
-          <h3>Parts</h3>
-          <p>No parts found for this transaction.</p>
-        </div>
-      {/if}
-    </div>
-  </section>
-  {/if}
-{/if}
-
-<VerificationModal
-  isOpen={verificationModalOpen}
-  currentStep={verificationStep}
-  checks={verificationChecks}
-  isVerifying={verificationState === "verifying"}
-  on:close={() => {
-    verificationModalOpen = false;
-  }}
-/>
-
-<style>
-  .result-section {
-    display: grid;
-    gap: 1.5rem;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .badge {
-    padding: 0.35rem 0.75rem;
-    border-radius: 999px;
-    background: var(--badge-bg);
-    color: var(--badge-text);
-    font-weight: 600;
-    font-size: 0.85rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .grid {
-    display: grid;
-    gap: 1.5rem;
-  }
-
-  @media (min-width: 1280px) {
-    .grid {
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    }
-  }
-
-  .card {
-    background: var(--card-bg);
-    border-radius: 1rem;
-    border: 1px solid var(--card-border);
-    padding: 1.25rem 1.5rem;
-    box-shadow: 0 18px 40px var(--card-shadow);
-  }
-
-  .note-card p {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    line-height: 1.5;
-  }
-
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-    gap: 0.75rem;
-  }
-
-  .button-group {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  .card h3 {
-    margin: 0;
-    font-size: 1.1rem;
-    color: var(--text-primary);
-  }
-
-  .verify-button {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    border: 1px solid var(--card-border);
-    background: var(--accent);
-    color: white;
-    font-weight: 500;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: opacity 0.2s ease, background 0.2s ease;
-  }
-
-  .verify-button:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .verify-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-
-  .verify-button.verified {
-    background: #10b981;
-    border-color: #10b981;
-  }
-
-  .verify-button.failed {
-    background: #ef4444;
-    border-color: #ef4444;
-  }
-
-  .learn-more-button {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    border: 1px solid var(--card-border);
-    background: transparent;
-    color: var(--text-secondary);
-    font-weight: 500;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease;
-    white-space: nowrap;
-  }
-
-  .learn-more-button:hover {
-    background: var(--card-border);
-    color: var(--text-primary);
-  }
-
-  .previous-button {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    border: 1px solid var(--card-border);
-    background: var(--accent);
-    color: white;
-    font-weight: 500;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: opacity 0.2s ease, background 0.2s ease;
-    width: 100%;
-    margin-top: 1rem;
-  }
-
-  .previous-button:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .previous-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-
-  .error-text {
-    color: #ef4444;
-    font-size: 0.875rem;
-    margin-top: 0.5rem;
-  }
-
-  @media (max-width: 640px) {
-    .card-header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .button-group {
-      width: 100%;
-      flex-direction: column;
-    }
-
-    .verify-button,
-    .learn-more-button {
-      width: 100%;
-    }
-  }
-
-  dl {
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  dt {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-label);
-  }
-
-  dd {
-    margin: 0;
-    font-size: 0.95rem;
-    color: var(--text-primary);
-    word-break: break-all;
-  }
-
-  .media-card figure {
-    margin: 0 0 1rem;
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .media-card img {
-    width: 100%;
-    border-radius: 0.75rem;
-    object-fit: cover;
-    max-height: 240px;
-    border: 1px solid var(--image-border);
-  }
-
-  .media-card figcaption {
-    font-size: 0.9rem;
-    color: var(--text-muted);
-  }
-
-  .media-card .empty {
-    margin: 0;
-    color: var(--text-muted);
-  }
-
-  .chain-tx-link {
-    color: var(--accent);
-    text-decoration: none;
-    word-break: break-all;
-  }
-
-  .chain-tx-link:hover {
-    text-decoration: underline;
   }
 </style>
 </file>
@@ -8546,6 +7985,677 @@ export async function unifiedSearch(
 }
 </file>
 
+<file path="src/lib/components/ResultPanel.svelte">
+<script lang="ts">
+  import type { ExplorerResult, ExplorerNFT, StoreInfo } from "../types";
+  import { formatAddress, formatAmount, formatDate } from "../utils/format";
+  import PartialTable from "./PartialTable.svelte";
+  import PartsList from "./PartsList.svelte";
+  import VerificationModal from "./VerificationModal.svelte";
+  import { getChainTxLink, getArweaveTxLink } from "../utils/storeLinks";
+  import { fetchNftMetadata } from "../api";
+  import { verifyTransaction } from "../utils/verification";
+
+  import { createEventDispatcher } from "svelte";
+  
+  export let result: ExplorerResult | null = null;
+  export let canGoBack = false;
+  export let canGoForward = false;
+  export let loading = false;
+  export let onGoBack: (() => void) | null = null;
+  export let onGoForward: (() => void) | null = null;
+  
+  const dispatch = createEventDispatcher();
+
+  let transactionNft: ExplorerNFT | null = null;
+  let verificationModalOpen = false;
+  let verificationStep = "";
+  let verificationState: "idle" | "verifying" | "verified" | "failed" = "idle";
+  let verificationError: string | null = null;
+  let verificationChecks: any[] = [];
+
+  // Reset verification state when result changes (new search)
+  $: if (result) {
+    verificationState = "idle";
+    verificationModalOpen = false;
+    verificationStep = "";
+    verificationError = null;
+    verificationChecks = [];
+  }
+
+  // Fetch NFT metadata for transaction
+  $: if (result && result.kind === "transaction") {
+    if (result.nft) {
+      transactionNft = result.nft;
+    } else if (result.transaction.nftId) {
+      // Fetch NFT metadata using transaction's nftId
+      fetchNftMetadata(result.transaction.nftId).then((nft: ExplorerNFT | null) => {
+        transactionNft = nft;
+      });
+    } else if (result.parts && result.parts.length > 0) {
+      // Fallback: use first part's parent_hash
+      const firstPart = result.parts[0];
+      if (firstPart && firstPart.parent_hash) {
+        fetchNftMetadata(firstPart.parent_hash).then((nft: ExplorerNFT | null) => {
+          transactionNft = nft;
+        });
+      }
+    }
+  } else {
+    transactionNft = null;
+  }
+
+  async function handleVerify() {
+    if (!result || result.kind !== "transaction" || verificationState === "verifying") {
+      return;
+    }
+
+    // If already verified, just show the results
+    if (verificationState === "verified" || verificationState === "failed") {
+      verificationModalOpen = true;
+      return;
+    }
+
+    verificationModalOpen = true;
+    verificationState = "verifying";
+    verificationError = null;
+    verificationStep = "";
+    verificationChecks = [];
+
+    try {
+      const updateStep = (step: string) => {
+        verificationStep = step;
+      };
+
+      const verificationResult = await verifyTransaction(result.transaction, updateStep);
+
+      // Store checks for display
+      verificationChecks = verificationResult.checks || [];
+
+      if (verificationResult.verified) {
+        verificationState = "verified";
+        verificationStep = "";
+        verificationError = null;
+      } else {
+        verificationState = "failed";
+        verificationStep = "";
+        verificationError = verificationResult.errors.length > 0 
+          ? verificationResult.errors.join("; ")
+          : "Unknown verification error";
+      }
+    } catch (error) {
+      verificationState = "failed";
+      verificationStep = "";
+      verificationError = error instanceof Error ? error.message : String(error);
+      verificationChecks = [{
+        name: "Verification Process",
+        passed: false,
+        message: error instanceof Error ? error.message : String(error)
+      }];
+    }
+  }
+
+</script>
+
+{#if result}
+  {#if result.kind === "part"}
+  <section class="result-section">
+    <header>
+      <h2>Part</h2>
+      <span class="badge">Part Hash</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <h3>Part Metadata</h3>
+        <div class="card-content">
+        <dl>
+          <div>
+            <dt>Part Hash</dt>
+            <dd>{result.part._id}</dd>
+          </div>
+          <div>
+            <dt>Part Number</dt>
+            <dd>{result.part.part_no}</dd>
+          </div>
+          <div>
+            <dt>Parent NFT</dt>
+            <dd>{result.part.parent_hash}</dd>
+          </div>
+          <div>
+            <dt>Owner</dt>
+            <dd>{formatAddress(result.part.owner)}</dd>
+          </div>
+          <div>
+            <dt>Listing</dt>
+            <dd>{result.part.listing ?? "Not Listed"}</dd>
+          </div>
+          {#if result.part.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.part.storeName}</dd>
+            </div>
+          {/if}
+        </dl>
+        </div>
+        <div class="navigation-buttons">
+          <button
+            class="nav-button"
+            disabled={!canGoBack || loading}
+            on:click={() => onGoBack?.()}
+            title="Go to previous search"
+          >
+            ← Previous
+          </button>
+          <button
+            class="nav-button"
+            disabled={!canGoForward || loading}
+            on:click={() => onGoForward?.()}
+            title="Go to next search"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+      {#if result.nft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if result.nft.imageurl}
+            <figure>
+              <img src={result.nft.imageurl} alt={`NFT ${result.nft.name}`} />
+              <figcaption>{result.nft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{result.nft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{result.nft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(result.nft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      <PartialTable
+        title="Partial Transactions"
+        partials={result.partialTransactions}
+        pagination={result.pagination}
+        showTransactionHash={result.kind === "part"}
+        on:search={(e) => dispatch("search", e.detail)}
+      />
+    </div>
+  </section>
+{:else if result.kind === "transaction"}
+  <section class="result-section">
+    <header>
+      <h2>Transaction</h2>
+      <span class="badge">Transaction Lookup</span>
+    </header>
+    <div class="grid">
+      <div class="card">
+        <div class="card-header">
+          <h3>Summary</h3>
+          {#if result.kind === "transaction"}
+            <div class="button-group">
+              <button
+                class="verify-button"
+                class:verified={verificationState === "verified"}
+                class:failed={verificationState === "failed"}
+                disabled={verificationState === "verifying"}
+                on:click={handleVerify}
+              >
+                {#if verificationState === "verified"}
+                  ✓ Transaction Verified
+                {:else if verificationState === "failed"}
+                  ✗ Verification Failed
+                {:else if verificationState === "verifying"}
+                  Verifying...
+                {:else}
+                  Verify
+                {/if}
+              </button>
+              {#if verificationState === "verified" || verificationState === "failed"}
+                <button
+                  class="learn-more-button"
+                  on:click={() => dispatch("navigateToVerification")}
+                >
+                  Learn More
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="card-content">
+        <dl>
+          <div>
+            <dt>Transaction ID</dt>
+            <dd>{result.transaction._id}</dd>
+          </div>
+          {#if result.transaction.transaction_number !== undefined}
+            <div>
+              <dt>Transaction Number</dt>
+              <dd>{result.transaction.transaction_number}</dd>
+            </div>
+          {/if}
+          <div>
+            <dt>Type</dt>
+            <dd>{result.transaction.type || "TRANSACTION"}</dd>
+          </div>
+          <div>
+            <dt>Chain Hash</dt>
+            <dd>
+              {#if result.transaction.chainTx}
+                <a
+                  href={getChainTxLink(result.transaction.chainTx, result.transaction.currency)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.chainTx)}
+                </a>
+              {:else}
+                —
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Arweave Transaction</dt>
+            <dd>
+              {#if result.transaction.arweaveTxId}
+                <a
+                  href={getArweaveTxLink(result.transaction.arweaveTxId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chain-tx-link"
+                >
+                  {formatAddress(result.transaction.arweaveTxId)}
+                </a>
+              {:else}
+                <span class="text-muted">Not uploaded</span>
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Buyer</dt>
+            <dd>{result.transaction.buyer ? formatAddress(result.transaction.buyer) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Seller</dt>
+            <dd>{result.transaction.seller ? formatAddress(result.transaction.seller) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Quantity</dt>
+            <dd>{result.transaction.quantity}</dd>
+          </div>
+          {#if result.transaction.type === "LISTING_CREATE"}
+            <div>
+              <dt>Price</dt>
+              <dd>{result.transaction.price ? formatAmount(result.transaction.price, "YRT") : "—"}</dd>
+            </div>
+            <div>
+              <dt>Accepted Currencies</dt>
+              <dd>
+                {#if result.transaction.sellerWallets && Object.keys(result.transaction.sellerWallets).length > 0}
+                  {Object.keys(result.transaction.sellerWallets).join(", ")}
+                {:else}
+                  —
+                {/if}
+              </dd>
+            </div>
+          {:else}
+            <div>
+              <dt>Amount</dt>
+              <dd>{formatAmount(result.transaction.amount || "", result.transaction.currency || "")}</dd>
+            </div>
+            {#if result.transaction.currency}
+              <div>
+                <dt>Currency</dt>
+                <dd>{result.transaction.currency.toUpperCase()}</dd>
+              </div>
+            {/if}
+          {/if}
+          <div>
+            <dt>Timestamp</dt>
+            <dd>{formatDate(result.transaction.timestamp)}</dd>
+          </div>
+          {#if result.transaction.storeName}
+            <div>
+              <dt>Store</dt>
+              <dd>{result.transaction.storeName}</dd>
+            </div>
+          {/if}
+        </dl>
+        </div>
+        <div class="navigation-buttons">
+          <button
+            class="nav-button"
+            disabled={!canGoBack || loading}
+            on:click={() => onGoBack?.()}
+            title="Go to previous search"
+          >
+            ← Previous
+          </button>
+          <button
+            class="nav-button"
+            disabled={!canGoForward || loading}
+            on:click={() => onGoForward?.()}
+            title="Go to next search"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+      {#if transactionNft}
+        <div class="card media-card">
+          <h3>NFT Metadata</h3>
+          {#if transactionNft.imageurl}
+            <figure>
+              <img src={transactionNft.imageurl} alt={`NFT ${transactionNft.name}`} />
+              <figcaption>{transactionNft.name}</figcaption>
+            </figure>
+          {:else}
+            <p class="empty">No image available.</p>
+          {/if}
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd>{transactionNft.name}</dd>
+            </div>
+            <div>
+              <dt>Description</dt>
+              <dd>{transactionNft.description}</dd>
+            </div>
+            <div>
+              <dt>Creator</dt>
+              <dd>{formatAddress(transactionNft.creator)}</dd>
+            </div>
+          </dl>
+        </div>
+      {/if}
+      {#if result.parts && result.parts.length > 0}
+        <PartsList 
+          parts={result.parts} 
+          pagination={result.pagination}
+          on:search={(e) => dispatch("search", e.detail)}
+        />
+      {:else}
+        <div class="card note-card">
+          <h3>Parts</h3>
+          <p>No parts found for this transaction.</p>
+        </div>
+      {/if}
+    </div>
+  </section>
+  {/if}
+{/if}
+
+<VerificationModal
+  isOpen={verificationModalOpen}
+  currentStep={verificationStep}
+  checks={verificationChecks}
+  isVerifying={verificationState === "verifying"}
+  on:close={() => {
+    verificationModalOpen = false;
+  }}
+/>
+
+<style>
+  .result-section {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .badge {
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--badge-text);
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .grid {
+    display: grid;
+    gap: 1.5rem;
+    align-items: stretch;
+  }
+
+  @media (min-width: 1280px) {
+    .grid {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+  }
+
+  .grid > * {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 18px 40px var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 600px;
+    max-height: 600px;
+  }
+
+  .card-content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .card-content > dl {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .note-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    gap: 0.75rem;
+  }
+
+  .button-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .card h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .verify-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease, background 0.2s ease;
+  }
+
+  .verify-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .verify-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .verify-button.verified {
+    background: #10b981;
+    border-color: #10b981;
+  }
+
+  .verify-button.failed {
+    background: #ef4444;
+    border-color: #ef4444;
+  }
+
+  .learn-more-button {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .learn-more-button:hover {
+    background: var(--card-border);
+    color: var(--text-primary);
+  }
+
+  @media (max-width: 640px) {
+    .card-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .button-group {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    .verify-button,
+    .learn-more-button {
+      width: 100%;
+    }
+  }
+
+  dl {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  dt {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-label);
+  }
+
+  dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .navigation-buttons {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--card-border);
+  }
+
+  .nav-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px var(--card-shadow);
+  }
+
+  .nav-button:hover:not(:disabled) {
+    background: var(--card-border);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px var(--card-shadow);
+  }
+
+  .nav-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .nav-button:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
+  .media-card figure {
+    margin: 0 0 1rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .media-card img {
+    width: 100%;
+    border-radius: 0.75rem;
+    object-fit: cover;
+    max-height: 240px;
+    border: 1px solid var(--image-border);
+  }
+
+  .media-card figcaption {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .media-card .empty {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .chain-tx-link {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+  }
+
+  .chain-tx-link:hover {
+    text-decoration: underline;
+  }
+</style>
+</file>
+
 <file path="src/App.svelte">
 <script lang="ts">
   import { onMount } from "svelte";
@@ -8572,21 +8682,46 @@ export async function unifiedSearch(
   let mobileMenuOpen = false;
   let activeSection = "search";
   let showTosModal = false;
+
+  // Search history for browser-like navigation
+  type HistoryEntry = {
+    query: string;
+    storeId: string | null;
+  };
+  let searchHistory: HistoryEntry[] = [];
+  let historyIndex = -1; // Current position in history (-1 means no history)
+  let isNavigatingHistory = false; // Flag to prevent adding to history when navigating
   
-  // Terms of Service text
-  const tosText = `NFTs are the evidence of physical asset in the digital world that can be bought and sold like any other piece of property, issued via Blockchain.
-The Platform is built on top of the Ethereum network and users can only buy and sell Collectibles using the cryptocurrency Ether ("ETH"). No fiat money is stored or handled by the Platform at any point.
-"NFTs" means the tokens with string constant public presence, which are tracked by the Txn Hash, deployed to the Ethereum Blockchain.
-Peer-to-peer transactions, allow you freely trade your assets by NFTs, without a bank or financial institution intermediary.
-NFTs are intended to be "non-fungible" tokens representing a unique Collectible. 
-Users are responsible for all matters relating to their accounts on the NFTs Apps or the ETH blockchain accounts or addresses through which they interact with the Offerings.
-Users are responsible for protecting the confidentiality of their login information for the NFTs Apps or the private keys controlling the relevant blockchain accounts or addresses through which they interact with the Offerings.
-All content on the NFTs Platform belongs to Users. What's yours is yours — you own your Content
+  // Terms of Service text - matches main store
+  const tosText = `NFTs are the evidence of the Real-world asset (RWA) in the digital world that can be bought and sold like any other piece of property, issued via Blockchain.
+
+The Platform is built on top of the Blockchain network and users can buy and sell NFT parts using the crypto currencies, only, Ether (ETH) or Solana (SOL). 
+No fiat money is stored or handled by the Platform at any point.
+
+The prices are displayed in YRT (a platform token, only) is converted to ETH or SOL at the time of transaction. The value of one YRT is based on a weighted basket of five major currencies.
+YRT is a Clearing Token that designed to to facilitate transactions directly on the blockchain.
+
+NFTs are divided into parts that can be individually owned and traded
+"NFT Parts" means fractionalized portions of NFTs, each tracked by unique identifiers and transaction hashes, deployed to the Ethereum and Solana blockchains, allowing multiple users to own different parts of the same NFT.
+Platform tracks individual parts of NFTs.
+
+Peer-to-peer transactions, allow you freely trade assets by your "NFT Parts", without a bank or financial institution intermediary.
+
+Platform uses 12-word mnemonic phrases as a basic and only standard for Blockchain authentication.
+Users are responsible for protecting the confidentiality of their login information and private keys (12-word mnemonic phrases) that control their blockchain accounts or addresses through which they interact with the Platform. 
+IMPORTANT: Your mnemonic phrase is encrypted and stored locally in your browser, it never leaves your device or transmitted to any third part servers.
+
+All NFT parts you own on the Platform belong to you. What's yours is yours — you own your NFT parts.
 The NFTs Platform are being provided on an "AS IS" and "AS AVAILABLE" basis.
+
 NFTs Platform shall not be liable for any errors, misrepresentations, or omissions in, of, and about, the content, nor for the availability of the content. NFTs Platform shall not be liable for any losses, injuries, or damages from the purchase, inability to purchase, display, or use of content.
-Users must not, create, buy, sell or use any Collectible that infringes or in a manner infringing the copyright, trademark, patent, trade secret or other intellectual property or other proprietary rights of others, or upload, or otherwise make available, files that contain images, photographs, or other material protected by intellectual property laws or rights of privacy or publicity unless the applicable User owns or controls the rights thereto or has received all necessary consent to do the same.
+All transactions are permanently stored on Arweave Blockchain for verification and audit purposes.
+
+Users must not create, buy, sell, gift, or use any NFT part or Collectible that infringes or in a manner infringing the copyright, trademark, patent, trade secret or other intellectual property or other proprietary rights of others, or upload, or otherwise make available, files that contain images, photographs, or other material protected by intellectual property laws or rights of privacy or publicity unless the applicable User owns or controls the rights thereto or has received all necessary consent to do the same.
 User acknowledges and agrees that use of the Offerings is at the User's own risk and on own initiative and are responsible for compliance with local laws.
-Before Users make any decisions involving the Offerings, Users should seek independent professional advice from persons licensed and qualified in the area for which such advice would be appropriate.`;
+Before Users make any decisions involving the Offerings, Users should seek independent professional advice from persons licensed and qualified in the area for which such advice would be appropriate.
+
+"Nomin Explorer" is a service for browsing and verifying transactions.`;
 
   function openTosModal() {
     showTosModal = true;
@@ -8602,7 +8737,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     }
   });
 
-  async function executeSearch(value: string, page = 0, storeId: string | null = null) {
+  async function executeSearch(value: string, page = 0, storeId: string | null = null, addToHistory = true) {
     const input = value.trim();
     if (!input) {
       error = "Please enter a value to search.";
@@ -8623,20 +8758,58 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       result = data;
       pagination = data.pagination;
       currentPage = page;
+
+      // Add to history if not navigating through history
+      if (addToHistory && !isNavigatingHistory) {
+        const newEntry: HistoryEntry = { query: input, storeId };
+        // Remove any forward history (if we're not at the end)
+        if (historyIndex < searchHistory.length - 1) {
+          searchHistory = searchHistory.slice(0, historyIndex + 1);
+        }
+        // Add new entry
+        searchHistory = [...searchHistory, newEntry];
+        historyIndex = searchHistory.length - 1;
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : "Unexpected error";
       result = null;
       pagination = null;
     } finally {
       loading = false;
+      isNavigatingHistory = false;
     }
   }
 
   async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
     query = event.detail.query;
     selectedStoreId = event.detail.storeId ?? null;
-    await executeSearch(query, 0, selectedStoreId);
+    await executeSearch(query, 0, selectedStoreId, true);
   }
+
+  async function goBack() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      const entry = searchHistory[historyIndex];
+      isNavigatingHistory = true;
+      query = entry.query;
+      selectedStoreId = entry.storeId;
+      await executeSearch(entry.query, 0, entry.storeId, false);
+    }
+  }
+
+  async function goForward() {
+    if (historyIndex < searchHistory.length - 1) {
+      historyIndex++;
+      const entry = searchHistory[historyIndex];
+      isNavigatingHistory = true;
+      query = entry.query;
+      selectedStoreId = entry.storeId;
+      await executeSearch(entry.query, 0, entry.storeId, false);
+    }
+  }
+
+  $: canGoBack = historyIndex > 0;
+  $: canGoForward = historyIndex < searchHistory.length - 1;
 
   function totalPages() {
     if (!pagination) return 0;
@@ -8770,10 +8943,19 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     </div>
 
     {#if result}
-      <ResultPanel {result} {stores} on:search={handleSearch} on:navigateToVerification={() => {
-        setActiveSection('verification');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }} />
+      <ResultPanel 
+        {result} 
+        {canGoBack}
+        {canGoForward}
+        {loading}
+        onGoBack={goBack}
+        onGoForward={goForward}
+        on:search={handleSearch} 
+        on:navigateToVerification={() => {
+          setActiveSection('verification');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }} 
+      />
     {/if}
   {:else if activeSection === 'network'}
     <NetworkPage />

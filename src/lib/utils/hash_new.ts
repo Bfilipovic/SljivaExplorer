@@ -7,8 +7,6 @@
  * UPDATED: Now uses unified structure for all transaction types (standardized)
  */
 
-import { normalizeAddress } from "./addressUtils";
-
 /**
  * Deterministic stringify function for consistent hashing.
  * Handles object key sorting, Date serialization, null/undefined normalization
@@ -81,7 +79,6 @@ async function hashObject(obj: any): Promise<string> {
  * - GIFT_CLAIM
  * - GIFT_REFUSE
  * - GIFT_CANCEL
- * - UPLOAD
  */
 function hashableTransaction(transaction: any): any {
   // Exclude technical metadata that should not be in hash
@@ -110,19 +107,26 @@ function hashableTransaction(transaction: any): any {
       : null,
     quantity: Number(rest.quantity || 0),
     // Party fields
-    buyer: normalizeAddress(rest.buyer),
-    seller: normalizeAddress(rest.seller),
-    giver: normalizeAddress(rest.giver),
-    receiver: normalizeAddress(rest.receiver),
+    buyer: rest.buyer !== null && rest.buyer !== undefined 
+      ? String(rest.buyer).toLowerCase() 
+      : null,
+    seller: rest.seller !== null && rest.seller !== undefined 
+      ? String(rest.seller).toLowerCase() 
+      : null,
+    giver: rest.giver !== null && rest.giver !== undefined 
+      ? String(rest.giver).toLowerCase() 
+      : null,
+    receiver: rest.receiver !== null && rest.receiver !== undefined 
+      ? String(rest.receiver).toLowerCase() 
+      : null,
     // Chain transaction fields
-    // Normalize empty strings to null for consistency
-    chainTx: (rest.chainTx !== null && rest.chainTx !== undefined && String(rest.chainTx).trim() !== "") 
+    chainTx: rest.chainTx !== null && rest.chainTx !== undefined 
       ? String(rest.chainTx) 
       : null,
-    currency: (rest.currency !== null && rest.currency !== undefined && String(rest.currency).trim() !== "") 
+    currency: rest.currency !== null && rest.currency !== undefined 
       ? String(rest.currency) 
       : null,
-    amount: (rest.amount !== null && rest.amount !== undefined && String(rest.amount).trim() !== "") 
+    amount: rest.amount !== null && rest.amount !== undefined 
       ? String(rest.amount) 
       : null,
     // Listing-specific fields
@@ -138,46 +142,10 @@ function hashableTransaction(transaction: any): any {
     bundleSale: rest.bundleSale !== null && rest.bundleSale !== undefined
       ? (rest.bundleSale === true || rest.bundleSale === "true")
       : null,
-    // Upload-specific fields
-    uploadId: rest.uploadId !== null && rest.uploadId !== undefined 
-      ? String(rest.uploadId) 
-      : null,
-    uploadedimageurl: (rest.uploadedimageurl !== null && rest.uploadedimageurl !== undefined && String(rest.uploadedimageurl).trim() !== "") 
-      ? String(rest.uploadedimageurl) 
-      : null,
-    uploadedimagedescription: (rest.uploadedimagedescription !== null && rest.uploadedimagedescription !== undefined && String(rest.uploadedimagedescription).trim() !== "") 
-      ? String(rest.uploadedimagedescription) 
-      : null,
-    uploadedimagename: (rest.uploadedimagename !== null && rest.uploadedimagename !== undefined && String(rest.uploadedimagename).trim() !== "") 
-      ? String(rest.uploadedimagename) 
-      : null,
-    // Verification fields (for first upload)
-    isVerificationConfirmation: rest.isVerificationConfirmation !== null && rest.isVerificationConfirmation !== undefined
-      ? (rest.isVerificationConfirmation === true || rest.isVerificationConfirmation === "true")
-      : null,
-    verifiedUserUsername: (rest.verifiedUserUsername !== null && rest.verifiedUserUsername !== undefined && String(rest.verifiedUserUsername).trim() !== "") 
-      ? String(rest.verifiedUserUsername) 
-      : null,
-    verifiedUserBio: (rest.verifiedUserBio !== null && rest.verifiedUserBio !== undefined && String(rest.verifiedUserBio).trim() !== "") 
-      ? String(rest.verifiedUserBio) 
-      : null,
-    verifiedUserEmail: (rest.verifiedUserEmail !== null && rest.verifiedUserEmail !== undefined && String(rest.verifiedUserEmail).trim() !== "") 
-      ? String(rest.verifiedUserEmail) 
-      : null,
-    verifiedUserFullName: (rest.verifiedUserFullName !== null && rest.verifiedUserFullName !== undefined && String(rest.verifiedUserFullName).trim() !== "") 
-      ? String(rest.verifiedUserFullName) 
-      : null,
-    verifiedUserCountry: (rest.verifiedUserCountry !== null && rest.verifiedUserCountry !== undefined && String(rest.verifiedUserCountry).trim() !== "") 
-      ? String(rest.verifiedUserCountry) 
-      : null,
-    verifiedUserCity: (rest.verifiedUserCity !== null && rest.verifiedUserCity !== undefined && String(rest.verifiedUserCity).trim() !== "") 
-      ? String(rest.verifiedUserCity) 
-      : null,
-    verifiedUserPhysicalAddress: (rest.verifiedUserPhysicalAddress !== null && rest.verifiedUserPhysicalAddress !== undefined && String(rest.verifiedUserPhysicalAddress).trim() !== "") 
-      ? String(rest.verifiedUserPhysicalAddress) 
-      : null,
     // Signature fields
-    signer: normalizeAddress(rest.signer),
+    signer: rest.signer !== null && rest.signer !== undefined 
+      ? String(rest.signer).toLowerCase() 
+      : null,
     signature: rest.signature !== null && rest.signature !== undefined 
       ? String(rest.signature) 
       : null,
