@@ -216,7 +216,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
         Search
       </a>
       <a href="#network" class="navbar__link" class:active={activeSection === 'network'} on:click={(e) => handleNavClick(e, 'network')}>
-        Our network
+        Nomin Network
       </a>
       <a href="#terms" class="navbar__link" class:active={activeSection === 'terms'} on:click={(e) => handleNavClick(e, 'terms')}>
         Terms of service
@@ -306,7 +306,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
         <h2>Terms of Service</h2>
       </div>
       <div class="content-body">
-        <TermsOfServicePage />
+        <TermsOfServicePage {tosText} />
       </div>
     </div>
   {:else if activeSection === 'verification'}

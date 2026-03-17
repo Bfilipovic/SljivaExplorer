@@ -95,23 +95,23 @@
       
       // For localhost, use port 5173 for frontend (standard Vite dev port)
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${protocol}//${hostname}:5173/store`;
+        return `${protocol}//${hostname}:5173/kodak`;
       }
       
-      // For production, remove /api/explorer path and use base domain + /store
+      // For production, remove /api/explorer path and use base domain + /kodak
       const base = baseUrl.replace(/\/api\/explorer.*$/, "");
-      return `${base}/store`;
+      return `${base}/kodak`;
     } catch {
       // Fallback: try regex extraction
       const match = baseUrl.match(/^(https?:\/\/[^\/]+)/);
       if (match) {
         const base = match[1];
         if (base.includes('localhost')) {
-          return base.replace(/:(\d+)/, ':5173') + '/store';
+          return base.replace(/:(\d+)/, ':5173') + '/kodak';
         }
-        return base + '/store';
+        return base + '/kodak';
       }
-      return baseUrl.replace(/\/api\/explorer.*$/, "") + '/store';
+      return baseUrl.replace(/\/api\/explorer.*$/, "") + '/kodak';
     }
   }
 
@@ -131,7 +131,7 @@
 
 <div class="content-page">
   <div class="content-header">
-    <h2>Our Network</h2>
+    <h2>Nomin Network</h2>
     <p class="content-description">
       Explore all Nomin instances connected to this explorer. Each store operates independently
       and maintains its own transaction history.
@@ -183,9 +183,6 @@
             </div>
             <div class="store-title-section">
               <h3 class="store-name">{store.name}</h3>
-              {#if store.website}
-                <p class="store-website">{store.website}</p>
-              {/if}
             </div>
           </div>
 
@@ -370,13 +367,6 @@
     font-size: 1.25rem;
     font-weight: 600;
     color: var(--text-primary);
-    word-wrap: break-word;
-  }
-
-  .store-website {
-    margin: 0;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
     word-wrap: break-word;
   }
 
