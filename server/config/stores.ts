@@ -25,10 +25,15 @@ export interface StoreConfig {
  * ]
  */
 function parseStoresFromEnv(): StoreConfig[] {
-  const storesEnv = process.env.EXPLORER_STORES;
+  let storesEnv = process.env.EXPLORER_STORES;
   
   if (!storesEnv) {
     return getDefaultStores();
+  }
+
+  // Strip surrounding single or double quotes (env loaders may pass them through)
+  if (typeof storesEnv === 'string') {
+    storesEnv = storesEnv.trim().replace(/^['"]|['"]$/g, '');
   }
 
   try {

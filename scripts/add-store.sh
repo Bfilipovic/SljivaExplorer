@@ -33,8 +33,8 @@ if [ ! -f "$ENV_FILE" ]; then
   touch "$ENV_FILE"
 fi
 
-# Extract current stores or use empty array
-CURRENT_STORES=$(grep "^EXPLORER_STORES=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed "s/^'//; s/'$//" || echo '[]')
+# Extract current stores or use empty array (strip surrounding single or double quotes)
+CURRENT_STORES=$(grep "^EXPLORER_STORES=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || echo '[]')
 
 # Validate JSON or default to empty array
 if [ -z "$CURRENT_STORES" ] || [ "$CURRENT_STORES" = "" ]; then
@@ -72,13 +72,17 @@ NEW_STORES=$(node -e "
 
 rm -f "$TEMP_JSON"
 
+# Escape double quotes for .env: value written as EXPLORER_STORES="[...]" so
+# env loaders pass raw JSON (no outer quotes), avoiding JSON parse errors in Node.
+NEW_STORES_ESCAPED=$(echo "$NEW_STORES" | sed 's/"/\\"/g')
+
 # Update .env file
 if grep -q "^EXPLORER_STORES=" "$ENV_FILE"; then
   # Update existing line
-  sed -i "s|^EXPLORER_STORES=.*|EXPLORER_STORES='$NEW_STORES'|" "$ENV_FILE"
+  sed -i "s|^EXPLORER_STORES=.*|EXPLORER_STORES=\"$NEW_STORES_ESCAPED\"|" "$ENV_FILE"
 else
   # Add new line
-  echo "EXPLORER_STORES='$NEW_STORES'" >> "$ENV_FILE"
+  echo "EXPLORER_STORES=\"$NEW_STORES_ESCAPED\"" >> "$ENV_FILE"
 fi
 
 echo "✅ Store '$STORE_ID' added successfully!"
