@@ -228,8 +228,10 @@ export async function searchExplorer(
       return {
         kind: "transaction",
         transaction: data.transaction,
+        parts: data.parts ?? [],
+        nft: data.nft ?? null,
         partialTransactions: data.partialTransactions ?? [],
-        pagination: null
+        pagination: data.pagination ?? null
       };
     }
     default: {
