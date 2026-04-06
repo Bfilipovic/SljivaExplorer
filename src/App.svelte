@@ -127,6 +127,14 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     await executeSearch(query, 0, selectedStoreId, true);
   }
 
+  /** Same store that served transaction lookup (aggregator sets transaction.storeId). */
+  function storeIdForTransactionParts(): string | undefined {
+    if (!result || result.kind !== "transaction") return selectedStoreId || undefined;
+    const fromTx = result.transaction.storeId?.trim();
+    if (fromTx) return fromTx;
+    return selectedStoreId || undefined;
+  }
+
   async function handleLoadTransactionParts(event: CustomEvent<{ page?: number }>) {
     if (!result || result.kind !== "transaction") return;
     const page = Math.max(0, event.detail?.page ?? 0);
@@ -136,7 +144,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       const data = await fetchTransactionParts(result.transaction._id, {
         page,
         pageSize,
-        storeId: selectedStoreId || undefined,
+        storeId: storeIdForTransactionParts(),
       });
       result = {
         ...result,

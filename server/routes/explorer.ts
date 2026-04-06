@@ -540,23 +540,31 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
     };
     if (storeId) queryParams.storeId = storeId;
 
-    if (storeId) {
-      const store = getStoreById(storeId);
-      if (!store) {
-        return res.status(404).json({ error: `Store '${storeId}' not found` });
-      }
+    const stores = getStores();
+    if (stores.length === 0) {
+      return res.status(500).json({ error: "No stores configured" });
+    }
 
+    const storeFromParam = storeId ? getStoreById(storeId) : undefined;
+    if (storeId && !storeFromParam) {
+      return res.status(404).json({ error: `Store '${storeId}' not found` });
+    }
+
+    // One backend: always use a single queryStore (no "any store" messaging, same path as ?storeId=…).
+    const loneStore = storeFromParam ?? (stores.length === 1 ? stores[0] : undefined);
+
+    if (loneStore) {
       const response = await queryStore<{
         parts: any[];
         pagination: { total: number; skip: number; limit: number };
         note?: string;
-      }>(store, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
+      }>(loneStore, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
         timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
       });
 
       if (response.error) {
         return res.status(502).json({
-          error: `Store '${storeId}' error: ${response.error}`,
+          error: `Store '${loneStore.id}' error: ${response.error}`,
           storeId: response.storeId,
           storeName: response.storeName
         });
@@ -572,11 +580,6 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
         pagination,
         ...(note && { note })
       });
-    }
-
-    const stores = getStores();
-    if (stores.length === 0) {
-      return res.status(500).json({ error: "No stores configured" });
     }
 
     const responses = await queryStores<{
@@ -600,12 +603,17 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
         continue;
       }
 
-      if (response.data && Array.isArray(response.data.parts)) {
-        successes.push(response);
+      if (!response.data) {
+        continue;
       }
+      const rawParts = response.data.parts;
+      if (rawParts !== undefined && !Array.isArray(rawParts)) {
+        continue;
+      }
+      successes.push(response);
     }
 
-    // `[]` is truthy in JS — do not return the first empty body while another store has rows.
+    // Prefer a body that actually has rows; otherwise first successful JSON (even total 0).
     const withRows = successes.filter((r) => {
       const partsLen = r.data?.parts?.length ?? 0;
       const total = r.data?.pagination?.total ?? 0;
@@ -614,7 +622,8 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
     const chosen = withRows[0] ?? successes[0];
 
     if (chosen?.data) {
-      const { parts = [], pagination, note } = chosen.data;
+      const parts = Array.isArray(chosen.data.parts) ? chosen.data.parts : [];
+      const { pagination, note } = chosen.data;
       return res.json({
         parts: parts.map((part: any) => enrichPart(part, chosen.storeId, chosen.storeName)),
         pagination,
@@ -624,7 +633,10 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
     }
 
     return res.status(404).json({
-      error: "Transaction not found in any store",
+      error:
+        errors.length > 0
+          ? `Could not load transaction parts. Store errors: ${errors.map((e) => `${e.storeId}: ${e.error}`).join("; ")}`
+          : "Transaction not found in any store",
       errors: errors.length > 0 ? errors : undefined
     });
   } catch (err) {
