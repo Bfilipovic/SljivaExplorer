@@ -399,7 +399,6 @@
         parts={result.parts ?? []}
         pagination={result.pagination}
         loadPartsDisabled={loading}
-        matchedBy={result.transactionMatchedBy ?? null}
         on:loadparts={(e) => dispatch("loadtransactionparts", e.detail)}
         on:search={(e) => dispatch("search", e.detail)}
       />

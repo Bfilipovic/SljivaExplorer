@@ -6,9 +6,6 @@
   export let parts: ExplorerPart[] = [];
   export let pagination: Pagination | null = null;
   export let loadPartsDisabled = false;
-  /** How the parent transaction was resolved (e.g. _id, arweaveTxId). */
-  export let matchedBy: string | null = null;
-
   const dispatch = createEventDispatcher<{
     search: { query: string };
     loadparts: { page?: number };
@@ -29,9 +26,6 @@
 
 <section class="card {parts.length ? 'table-card' : ''}">
   <h3>Parts in Transaction</h3>
-  {#if matchedBy}
-    <p class="matched-by">Matched by: {matchedBy}</p>
-  {/if}
   {#if showLoadPartsPrompt}
     <p class="hint">
       Load part rows on demand so large transactions stay fast to open.
@@ -153,12 +147,6 @@
 
   .empty {
     margin: 0;
-    color: var(--text-muted);
-  }
-
-  .matched-by {
-    margin: 0 0 0.75rem;
-    font-size: 0.8rem;
     color: var(--text-muted);
   }
 

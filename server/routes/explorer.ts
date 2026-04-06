@@ -588,6 +588,7 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
     });
 
     const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+    const successes: typeof responses = [];
 
     for (const response of responses) {
       if (response.error) {
@@ -599,15 +600,27 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
         continue;
       }
 
-      if (response.data?.parts) {
-        const { parts = [], pagination, note } = response.data;
-        return res.json({
-          parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
-          pagination,
-          ...(note && { note }),
-          ...(errors.length > 0 && { errors })
-        });
+      if (response.data && Array.isArray(response.data.parts)) {
+        successes.push(response);
       }
+    }
+
+    // `[]` is truthy in JS — do not return the first empty body while another store has rows.
+    const withRows = successes.filter((r) => {
+      const partsLen = r.data?.parts?.length ?? 0;
+      const total = r.data?.pagination?.total ?? 0;
+      return partsLen > 0 || total > 0;
+    });
+    const chosen = withRows[0] ?? successes[0];
+
+    if (chosen?.data) {
+      const { parts = [], pagination, note } = chosen.data;
+      return res.json({
+        parts: parts.map((part: any) => enrichPart(part, chosen.storeId, chosen.storeName)),
+        pagination,
+        ...(note && { note }),
+        ...(errors.length > 0 && { errors })
+      });
     }
 
     return res.status(404).json({
