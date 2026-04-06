@@ -6,7 +6,11 @@
 
 import express from "express";
 import { getStores, getStoreById } from "../config/stores.js";
-import { queryStore, queryStores } from "../utils/storeClient.js";
+import {
+  queryStore,
+  queryStores,
+  STORE_REQUEST_TIMEOUT_HEAVY_MS,
+} from "../utils/storeClient.js";
 
 const router = express.Router();
 
@@ -428,7 +432,9 @@ router.get("/transactions/id/:txId", async (req, res) => {
         parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(store, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
+      }>(store, `/transactions/id/${encodeURIComponent(txId)}`, queryParams, {
+        timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
+      });
 
       if (response.error) {
         return res.status(502).json({
@@ -478,7 +484,9 @@ router.get("/transactions/id/:txId", async (req, res) => {
         parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
+      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams, {
+        timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
+      });
 
       const results: any[] = [];
       const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
@@ -573,7 +581,9 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
         parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(store, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+      }>(store, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams, {
+        timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
+      });
 
       if (response.error) {
         return res.status(502).json({
@@ -623,7 +633,9 @@ router.get("/transactions/chain/:chainTx", async (req, res) => {
         parts?: any[];
         partialTransactions: any[];
         pagination?: { total: number; skip: number; limit: number } | null;
-      }>(stores, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams);
+      }>(stores, `/transactions/chain/${encodeURIComponent(chainTx)}`, queryParams, {
+        timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
+      });
 
       const results: any[] = [];
       const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
