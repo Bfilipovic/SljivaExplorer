@@ -1,13 +1,17 @@
 <script lang="ts">
-  import type { ExplorerPart, Pagination, StoreInfo } from "../types";
+  import type { ExplorerPart, Pagination } from "../types";
   import { formatAddress } from "../utils/format";
   import { createEventDispatcher } from "svelte";
 
   export let parts: ExplorerPart[] = [];
   export let pagination: Pagination | null = null;
+  export let loadPartsDisabled = false;
+  /** How the parent transaction was resolved (e.g. _id, arweaveTxId). */
+  export let matchedBy: string | null = null;
 
   const dispatch = createEventDispatcher<{
     search: { query: string };
+    loadparts: { page?: number };
   }>();
 
   function handlePartHashClick(partHash: string, event: MouseEvent) {
@@ -19,12 +23,29 @@
   $: rangeEnd = pagination && pagination.total > 0
     ? Math.min(pagination.skip + pagination.limit, pagination.total)
     : parts.length;
+  /** Lookup returns pagination:null; first parts fetch always sets pagination (even when total is 0). */
+  $: showLoadPartsPrompt = parts.length === 0 && pagination == null;
 </script>
 
 <section class="card {parts.length ? 'table-card' : ''}">
   <h3>Parts in Transaction</h3>
-  {#if !parts.length}
-    <p class="empty">No parts found.</p>
+  {#if matchedBy}
+    <p class="matched-by">Matched by: {matchedBy}</p>
+  {/if}
+  {#if showLoadPartsPrompt}
+    <p class="hint">
+      Load part rows on demand so large transactions stay fast to open.
+    </p>
+    <button
+      type="button"
+      class="load-parts-btn"
+      disabled={loadPartsDisabled}
+      on:click={() => dispatch("loadparts", { page: 0 })}
+    >
+      Show parts
+    </button>
+  {:else if !parts.length}
+    <p class="empty">No parts found for this transaction.</p>
   {:else}
     {#if pagination}
       <div class="summary">
@@ -133,6 +154,39 @@
   .empty {
     margin: 0;
     color: var(--text-muted);
+  }
+
+  .matched-by {
+    margin: 0 0 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .hint {
+    margin: 0 0 1rem;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  .load-parts-btn {
+    padding: 0.55rem 1.1rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--btn-primary-text, #fff);
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .load-parts-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .load-parts-btn:not(:disabled):hover {
+    filter: brightness(1.05);
   }
 
   .hash-link {

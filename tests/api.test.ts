@@ -53,17 +53,15 @@ describe("searchExplorer", () => {
         .mockResolvedValueOnce(
           mockResponse({
             part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+            nft: {
+              _id: "nft",
+              name: "Test NFT",
+              description: "Desc",
+              creator: "0xabc",
+              imageurl: "https://example.com/img.png"
+            },
             partialTransactions: [],
             pagination: { total: 1, skip: 0, limit: 50 }
-          })
-        )
-        .mockResolvedValueOnce(
-          mockResponse({
-            _id: "nft",
-            name: "Test NFT",
-            description: "Desc",
-            creator: "0xabc",
-            imageurl: "https://example.com/img.png"
           })
         )
     );

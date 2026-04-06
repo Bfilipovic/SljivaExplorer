@@ -89,6 +89,9 @@ export type ExplorerResult =
       kind: "transaction";
       transaction: ExplorerTransaction;
       parts?: ExplorerPart[];
+      /** Set after user clicks "Load parts" (transaction search no longer loads parts eagerly). */
+      partsLoaded?: boolean;
+      transactionMatchedBy?: string;
       nft?: ExplorerNFT | null;
       partialTransactions: PartialTransaction[];
       pagination: Pagination | null;

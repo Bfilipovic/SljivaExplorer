@@ -120,6 +120,22 @@ interface TransactionResponse {
   } | null;
 }
 
+interface TransactionLookupResponse {
+  transaction: ExplorerTransaction;
+  matchedBy: string;
+  nft?: ExplorerNFT | null;
+}
+
+interface TransactionPartsResponse {
+  parts: ExplorerPart[];
+  pagination: {
+    total: number;
+    skip: number;
+    limit: number;
+  };
+  note?: string;
+}
+
 async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
   const query = params ? `?${new URLSearchParams(params).toString()}` : "";
   const url = `${API_BASE}${path}${query}`;
@@ -182,6 +198,46 @@ async function requestSafe<T>(path: string, params?: Record<string, string>): Pr
   }
 }
 
+/** Indexed transaction resolve: _id → arweaveTxId → chainTx. No parts. */
+export async function fetchTransactionLookup(
+  query: string,
+  options: { storeId?: string } = {}
+): Promise<TransactionLookupResponse> {
+  const sanitized = query.trim();
+  if (!sanitized) {
+    throw new Error("Please enter a value to search.");
+  }
+  const params: Record<string, string> = { q: sanitized };
+  if (options.storeId) {
+    params.storeId = options.storeId;
+  }
+  return request<TransactionLookupResponse>("/transactions/lookup", params);
+}
+
+/** Paginated parts for a transaction (by canonical tx _id). */
+export async function fetchTransactionParts(
+  txId: string,
+  options: { page?: number; pageSize?: number; storeId?: string } = {}
+): Promise<TransactionPartsResponse> {
+  const raw = txId.trim();
+  if (!raw) {
+    throw new Error("Missing transaction id.");
+  }
+  const page = Math.max(0, options.page ?? 0);
+  const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 50));
+  const params: Record<string, string> = {
+    skip: String(page * pageSize),
+    limit: String(pageSize),
+  };
+  if (options.storeId) {
+    params.storeId = options.storeId;
+  }
+  return request<TransactionPartsResponse>(
+    `/transactions/id/${encodeURIComponent(raw)}/parts`,
+    params
+  );
+}
+
 export async function searchExplorer(
   mode: SearchMode,
   query: string,
@@ -220,18 +276,16 @@ export async function searchExplorer(
       };
     }
     case "transaction": {
-      const isObjectId = /^[0-9a-fA-F]{24}$/.test(sanitized);
-      const path = isObjectId
-        ? `/transactions/id/${encodeURIComponent(sanitized)}`
-        : `/transactions/chain/${encodeURIComponent(sanitized)}`;
-      const data = await request<TransactionResponse>(path, paginationParams);
+      const data = await fetchTransactionLookup(sanitized, { storeId: options.storeId });
       return {
         kind: "transaction",
         transaction: data.transaction,
-        parts: data.parts ?? [],
+        parts: [],
+        partsLoaded: false,
+        transactionMatchedBy: data.matchedBy,
         nft: data.nft ?? null,
-        partialTransactions: data.partialTransactions ?? [],
-        pagination: data.pagination ?? null
+        partialTransactions: [],
+        pagination: null
       };
     }
     default: {
@@ -242,8 +296,8 @@ export async function searchExplorer(
 }
 
 /**
- * Unified search that automatically tries part hash, chain hash, or transaction ID.
- * Tries different endpoints in sequence until one succeeds.
+ * Unified search: transaction lookup first (id → Arweave → chain, indexed only, no parts),
+ * then part hash. Parts for a transaction load only when the user requests them.
  */
 export async function unifiedSearch(
   query: string,
@@ -265,96 +319,52 @@ export async function unifiedSearch(
     paginationParams.storeId = options.storeId;
   }
 
+  const lookupParams: Record<string, string> = { q: sanitized };
+  if (options.storeId) {
+    lookupParams.storeId = options.storeId;
+  }
+
   const errors: string[] = [];
 
-  // Detect input characteristics
-  const has0xPrefix = sanitized.toLowerCase().startsWith("0x");
-  const without0x = has0xPrefix ? sanitized.slice(2) : sanitized;
-  const with0x = has0xPrefix ? sanitized : `0x${sanitized}`;
-
-  // Build search candidates - try all variations to maximize chances of finding the result
-  const searchCandidates: Array<{ type: string; path: string; desc: string }> = [];
-  const seenPaths = new Set<string>();
-
-  // Helper to add candidate without duplicates
-  const addCandidate = (type: string, path: string, desc: string) => {
-    if (!seenPaths.has(path)) {
-      seenPaths.add(path);
-      searchCandidates.push({ type, path, desc });
+  const txLookup = await requestSafe<TransactionLookupResponse>("/transactions/lookup", lookupParams);
+  if (txLookup.success) {
+    let nft = txLookup.data.nft ?? null;
+    if (!nft && txLookup.data.transaction.nftId) {
+      nft = await fetchNftMetadata(txLookup.data.transaction.nftId);
     }
-  };
-
-  // 1. Try part hash (original input)
-  addCandidate("part-hash", `/parts/${encodeURIComponent(sanitized)}`, "part hash");
-
-  // 2. Chain hash variations - try with and without 0x prefix
-  addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(sanitized)}`, "chain hash (as-is)");
-  
-  if (has0xPrefix) {
-    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(without0x)}`, "chain hash (without 0x)");
+    return {
+      kind: "transaction",
+      transaction: txLookup.data.transaction,
+      parts: [],
+      partsLoaded: false,
+      transactionMatchedBy: txLookup.data.matchedBy,
+      nft,
+      partialTransactions: [],
+      pagination: null
+    };
   }
-  
-  if (!has0xPrefix && /^[0-9a-fA-F]+$/i.test(sanitized)) {
-    addCandidate("chain-hash", `/transactions/chain/${encodeURIComponent(with0x)}`, "chain hash (with 0x)");
-  }
+  errors.push(`transaction (id / Arweave / chain): ${txLookup.error || "Unknown error"}`);
 
-  // 3. Transaction ID - always try
-  addCandidate("transaction-id", `/transactions/id/${encodeURIComponent(sanitized)}`, "transaction ID");
-
-  // Try all candidates
-  for (const candidate of searchCandidates) {
-    try {
-      if (candidate.type === "part-hash") {
-        const result = await requestSafe<PartResponse>(candidate.path, paginationParams);
-        if (result.success) {
-          return {
-            kind: "part",
-            part: result.data.part,
-            nft: result.data.nft ?? null,
-            partialTransactions: result.data.partialTransactions,
-            pagination: result.data.pagination ?? {
-              total: result.data.partialTransactions.length,
-              skip: page * pageSize,
-              limit: pageSize
-            }
-          };
-        }
-        const errorMsg = result.error || "Unknown error";
-        errors.push(`${candidate.desc}: ${errorMsg}`);
-      } else {
-        // transaction searches
-        const result = await requestSafe<TransactionResponse>(candidate.path, paginationParams);
-        if (result.success) {
-          // Use NFT metadata from server response, or fetch if not provided
-          let nft = result.data.nft ?? null;
-          if (!nft && result.data.transaction.nftId) {
-            nft = await fetchNftMetadata(result.data.transaction.nftId);
-          }
-
-          return {
-            kind: "transaction",
-            transaction: result.data.transaction,
-            parts: result.data.parts ?? [],
-            nft: nft,
-            partialTransactions: result.data.partialTransactions ?? [],
-            pagination: result.data.pagination ?? null
-          };
-        }
-        const errorMsg = result.error || "Unknown error";
-        errors.push(`${candidate.desc}: ${errorMsg}`);
+  const partRes = await requestSafe<PartResponse>(`/parts/${encodeURIComponent(sanitized)}`, paginationParams);
+  if (partRes.success) {
+    return {
+      kind: "part",
+      part: partRes.data.part,
+      nft: partRes.data.nft ?? null,
+      partialTransactions: partRes.data.partialTransactions,
+      pagination: partRes.data.pagination ?? {
+        total: partRes.data.partialTransactions.length,
+        skip: page * pageSize,
+        limit: pageSize
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
-      errors.push(`${candidate.desc}: ${errorMsg}`);
-    }
+    };
   }
+  errors.push(`part hash: ${partRes.error || "Unknown error"}`);
 
-  // All searches failed - provide detailed error message
-  const triedTypes = [...new Set(searchCandidates.map(c => c.desc))].join(", ");
-  const allErrors = errors.length > 0 ? errors.join("; ") : "No specific errors available";
+  const allErrors = errors.join("; ");
   throw new Error(
     `No results found for "${sanitized}". ` +
-    `Tried searching as: ${triedTypes}. ` +
+    `Tried: transaction lookup (indexed id, Arweave id, chain tx), then part hash. ` +
     `Errors: ${allErrors}`
   );
 }

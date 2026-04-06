@@ -17,7 +17,11 @@
   export let onGoBack: (() => void) | null = null;
   export let onGoForward: (() => void) | null = null;
   
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher<{
+    search: { query: string; storeId?: string | null };
+    loadtransactionparts: { page?: number };
+    navigateToVerification: Record<string, never>;
+  }>();
 
   let transactionNft: ExplorerNFT | null = null;
   let verificationModalOpen = false;
@@ -236,7 +240,7 @@
               {#if verificationState === "verified" || verificationState === "failed"}
                 <button
                   class="learn-more-button"
-                  on:click={() => dispatch("navigateToVerification")}
+                  on:click={() => dispatch("navigateToVerification", {})}
                 >
                   Learn More
                 </button>
@@ -391,18 +395,14 @@
           </dl>
         </div>
       {/if}
-      {#if result.parts && result.parts.length > 0}
-        <PartsList 
-          parts={result.parts} 
-          pagination={result.pagination}
-          on:search={(e) => dispatch("search", e.detail)}
-        />
-      {:else}
-        <div class="card note-card">
-          <h3>Parts</h3>
-          <p>No parts found for this transaction.</p>
-        </div>
-      {/if}
+      <PartsList
+        parts={result.parts ?? []}
+        pagination={result.pagination}
+        loadPartsDisabled={loading}
+        matchedBy={result.transactionMatchedBy ?? null}
+        on:loadparts={(e) => dispatch("loadtransactionparts", e.detail)}
+        on:search={(e) => dispatch("search", e.detail)}
+      />
     </div>
   </section>
   {/if}
@@ -481,13 +481,6 @@
   .card-content > dl {
     display: grid;
     gap: 0.75rem;
-  }
-
-  .note-card p {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    line-height: 1.5;
   }
 
   .card-header {

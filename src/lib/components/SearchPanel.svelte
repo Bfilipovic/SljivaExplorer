@@ -42,7 +42,7 @@
       <input
         class="field__input"
         type="text"
-        placeholder="Enter hash, transaction ID, or chain hash"
+        placeholder="Transaction id, Arweave id, chain tx, or part hash"
         bind:value={query}
         spellcheck="false"
         autocomplete="off"

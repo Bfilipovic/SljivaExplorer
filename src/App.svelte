@@ -7,7 +7,7 @@
   import TermsOfServicePage from "./lib/components/TermsOfServicePage.svelte";
   import TermsOfServiceModal from "./lib/components/TermsOfServiceModal.svelte";
   import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
-  import { unifiedSearch, fetchStores } from "./lib/api";
+  import { unifiedSearch, fetchStores, fetchTransactionParts } from "./lib/api";
 
   const pageSize = 50;
 
@@ -127,6 +127,32 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     await executeSearch(query, 0, selectedStoreId, true);
   }
 
+  async function handleLoadTransactionParts(event: CustomEvent<{ page?: number }>) {
+    if (!result || result.kind !== "transaction") return;
+    const page = Math.max(0, event.detail?.page ?? 0);
+    loading = true;
+    error = null;
+    try {
+      const data = await fetchTransactionParts(result.transaction._id, {
+        page,
+        pageSize,
+        storeId: selectedStoreId || undefined,
+      });
+      result = {
+        ...result,
+        parts: data.parts,
+        partsLoaded: true,
+        pagination: data.pagination,
+      };
+      pagination = data.pagination;
+      currentPage = page;
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Failed to load parts";
+    } finally {
+      loading = false;
+    }
+  }
+
   async function goBack() {
     if (historyIndex > 0) {
       historyIndex--;
@@ -161,6 +187,12 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     if (!pagination) return;
     const pages = totalPages();
     if (page < 0 || page >= pages) return;
+    if (result?.kind === "transaction" && result.partsLoaded) {
+      await handleLoadTransactionParts(
+        new CustomEvent("loadtransactionparts", { detail: { page } })
+      );
+      return;
+    }
     await executeSearch(query, page, selectedStoreId);
   }
 
@@ -291,7 +323,8 @@ Before Users make any decisions involving the Offerings, Users should seek indep
         {loading}
         onGoBack={goBack}
         onGoForward={goForward}
-        on:search={handleSearch} 
+        on:search={handleSearch}
+        on:loadtransactionparts={handleLoadTransactionParts}
         on:navigateToVerification={() => {
           setActiveSection('verification');
           window.scrollTo({ top: 0, behavior: 'smooth' });
