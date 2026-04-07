@@ -36,6 +36,8 @@ export interface Pagination {
 
 export interface PartialTransaction {
   part: string;
+  /** Denormalized part index when present (matches parts.part_no). */
+  part_no?: number;
   txId?: string;
   transaction?: string;
   from: string;
