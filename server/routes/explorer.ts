@@ -237,6 +237,36 @@ function enrichPartialTransactions(
   }));
 }
 
+/** Store backends can spend a long time on large mint part aggregations. */
+const STORE_TIMEOUT_HEAVY_MS = Number(process.env.STORE_REQUEST_TIMEOUT_HEAVY_MS || 180000);
+
+/**
+ * Load NFT metadata from the store origin (not the explorer host).
+ * The browser cannot reach arbitrary store /api/nfts in production; server-side fetch fixes that.
+ */
+async function fetchNftFromStore(
+  store: { baseUrl: string },
+  nftId: string | null | undefined
+): Promise<any | null> {
+  if (!nftId) return null;
+  try {
+    const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+    const nftResponse = await fetch(
+      `${nftBaseUrl}/api/nfts/${encodeURIComponent(String(nftId))}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(12000)
+      }
+    );
+    if (nftResponse.ok) {
+      return await nftResponse.json();
+    }
+  } catch (err) {
+    console.warn(`[Explorer API] Failed to fetch NFT metadata for ${nftId}:`, err);
+  }
+  return null;
+}
+
 /**
  * GET /api/explorer/parts/:partHash
  * 
@@ -444,9 +474,11 @@ router.get("/transactions/lookup", async (req, res) => {
       }
 
       const { transaction, matchedBy } = response.data;
+      const nft = await fetchNftFromStore(store, transaction?.nftId);
       return res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
-        matchedBy
+        matchedBy,
+        ...(nft && { nft })
       });
     }
 
@@ -480,9 +512,12 @@ router.get("/transactions/lookup", async (req, res) => {
     }
 
     const { transaction, matchedBy } = hit.data;
+    const hitStore = getStoreById(hit.storeId);
+    const nft = hitStore ? await fetchNftFromStore(hitStore, transaction?.nftId) : null;
     res.json({
       transaction: enrichTransaction(transaction, hit.storeId, hit.storeName),
       matchedBy,
+      ...(nft && { nft }),
       ...(errors.length > 0 && { errors })
     });
   } catch (err) {
@@ -519,7 +554,9 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
         parts: any[];
         pagination: { total: number; skip: number; limit: number };
         note?: string;
-      }>(store, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams);
+      }>(store, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
+        timeout: STORE_TIMEOUT_HEAVY_MS
+      });
 
       if (response.error) {
         return res.status(502).json({
@@ -550,7 +587,9 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
       parts: any[];
       pagination: { total: number; skip: number; limit: number };
       note?: string;
-    }>(stores, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams);
+    }>(stores, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
+      timeout: STORE_TIMEOUT_HEAVY_MS
+    });
 
     const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
     for (const response of responses) {

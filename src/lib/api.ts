@@ -203,10 +203,11 @@ export async function searchExplorer(
       const data = await request<{
         transaction: ExplorerTransaction;
         matchedBy: TransactionLookupMatchedBy;
+        nft?: ExplorerNFT | null;
       }>(`/transactions/lookup`, lookupParams);
 
-      let nft: ExplorerNFT | null = null;
-      if (data.transaction.nftId) {
+      let nft: ExplorerNFT | null = data.nft ?? null;
+      if (!nft && data.transaction.nftId) {
         nft = await fetchNftMetadata(data.transaction.nftId);
       }
 
