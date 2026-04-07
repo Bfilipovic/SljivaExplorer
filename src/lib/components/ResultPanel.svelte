@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ExplorerResult, ExplorerNFT, StoreInfo } from "../types";
+  import type { ExplorerResult, ExplorerNFT, SearchMode } from "../types";
   import { formatAddress, formatAmount, formatDate } from "../utils/format";
   import PartialTable from "./PartialTable.svelte";
   import PartsList from "./PartsList.svelte";
@@ -16,11 +16,12 @@
   export let loading = false;
   export let onGoBack: (() => void) | null = null;
   export let onGoForward: (() => void) | null = null;
-  
+  export let partsLoading = false;
+
   const dispatch = createEventDispatcher<{
-    search: { query: string; storeId?: string | null };
-    loadtransactionparts: { page?: number };
-    navigateToVerification: Record<string, never>;
+    search: { query: string; storeId?: string | null; mode?: SearchMode };
+    loadTransactionParts: { page: number };
+    navigateToVerification: void;
   }>();
 
   let transactionNft: ExplorerNFT | null = null;
@@ -204,7 +205,11 @@
         partials={result.partialTransactions}
         pagination={result.pagination}
         showTransactionHash={result.kind === "part"}
-        on:search={(e) => dispatch("search", e.detail)}
+        on:search={(e) =>
+          dispatch("search", {
+            query: e.detail.query,
+            mode: e.detail.mode
+          })}
       />
     </div>
   </section>
@@ -240,7 +245,7 @@
               {#if verificationState === "verified" || verificationState === "failed"}
                 <button
                   class="learn-more-button"
-                  on:click={() => dispatch("navigateToVerification", {})}
+                  on:click={() => dispatch("navigateToVerification")}
                 >
                   Learn More
                 </button>
@@ -395,13 +400,39 @@
           </dl>
         </div>
       {/if}
-      <PartsList
-        parts={result.parts ?? []}
-        pagination={result.pagination}
-        loadPartsDisabled={loading}
-        on:loadparts={(e) => dispatch("loadtransactionparts", e.detail)}
-        on:search={(e) => dispatch("search", e.detail)}
-      />
+      {#if result.partsLoaded}
+        <PartsList
+          parts={result.parts}
+          pagination={result.pagination}
+          showPager={true}
+          on:partspage={(e) => dispatch("loadTransactionParts", e.detail)}
+          on:search={(e) =>
+            dispatch("search", {
+              query: e.detail.query,
+              mode: e.detail.mode
+            })}
+        />
+        {#if result.partsNote}
+          <p class="parts-note">{result.partsNote}</p>
+        {/if}
+      {:else}
+        <div class="card note-card parts-pending">
+          <h3>Parts</h3>
+          <p>Load parts to list NFT parts linked to this transaction (50 per page).</p>
+          <button
+            type="button"
+            class="load-parts-btn"
+            disabled={partsLoading || loading}
+            on:click={() => dispatch("loadTransactionParts", { page: 0 })}
+          >
+            {#if partsLoading}
+              Loading…
+            {:else}
+              Load parts
+            {/if}
+          </button>
+        </div>
+      {/if}
     </div>
   </section>
   {/if}
@@ -438,6 +469,28 @@
     font-size: 0.85rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .parts-pending .load-parts-btn {
+    margin-top: 0.75rem;
+    padding: 0.6rem 1.2rem;
+    border-radius: 0.65rem;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--button-gradient-start), var(--button-gradient-end));
+    color: var(--button-text);
+  }
+
+  .parts-pending .load-parts-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .parts-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
   }
 
   .grid {
@@ -480,6 +533,13 @@
   .card-content > dl {
     display: grid;
     gap: 0.75rem;
+  }
+
+  .note-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
   }
 
   .card-header {

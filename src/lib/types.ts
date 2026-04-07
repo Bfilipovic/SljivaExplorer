@@ -1,5 +1,7 @@
 export type SearchMode = "part" | "transaction";
 
+export type TransactionLookupMatchedBy = "_id" | "arweaveTxId" | "chainTx";
+
 export interface StoreInfo {
   id: string;
   name: string;
@@ -88,10 +90,11 @@ export type ExplorerResult =
   | {
       kind: "transaction";
       transaction: ExplorerTransaction;
-      parts?: ExplorerPart[];
-      /** Set after user clicks "Load parts" (transaction search no longer loads parts eagerly). */
-      partsLoaded?: boolean;
-      transactionMatchedBy?: string;
+      matchedBy?: TransactionLookupMatchedBy;
+      /** Populated after explicit “Load parts” + paging. */
+      parts: ExplorerPart[];
+      partsLoaded: boolean;
+      partsNote?: string | null;
       nft?: ExplorerNFT | null;
       partialTransactions: PartialTransaction[];
       pagination: Pagination | null;

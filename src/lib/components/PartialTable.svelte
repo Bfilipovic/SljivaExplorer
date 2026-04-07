@@ -9,12 +9,12 @@
   export let showTransactionHash = false; // When true, show transaction hash instead of part hash
 
   const dispatch = createEventDispatcher<{
-    search: { query: string };
+    search: { query: string; mode?: "part" | "transaction" };
   }>();
 
-  function handleHashClick(hash: string, event: MouseEvent) {
+  function handleHashClick(hash: string, event: MouseEvent, mode: "part" | "transaction") {
     event.preventDefault();
-    dispatch("search", { query: hash });
+    dispatch("search", { query: hash, mode });
   }
 
   function getTransactionId(partial: PartialTransaction): string | null {
@@ -91,7 +91,7 @@
                     <button
                       type="button"
                       class="hash-link"
-                      on:click={(e) => handleHashClick(txId, e)}
+                      on:click={(e) => handleHashClick(txId, e, "transaction")}
                       title="Search for this transaction hash"
                     >
                       {formatAddress(txId)}
@@ -103,7 +103,7 @@
                   <button
                     type="button"
                     class="hash-link"
-                    on:click={(e) => handleHashClick(partial.part, e)}
+                    on:click={(e) => handleHashClick(partial.part, e, "part")}
                     title="Search for this part hash"
                   >
                     {formatAddress(partial.part)}

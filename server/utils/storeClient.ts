@@ -6,17 +6,7 @@
 
 import type { StoreConfig } from "../config/stores.js";
 
-/** Default for lightweight store calls (parts, last-tx, etc.) */
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
-
-/**
- * Store backends may run a heavy Mongo aggregation for transaction detail (many partial rows).
- * The explorer aggregator must not abort before the store responds (e.g. 100k+ parts can take 15–60s+).
- * Override with STORE_REQUEST_TIMEOUT_HEAVY_MS.
- */
-export const STORE_REQUEST_TIMEOUT_HEAVY_MS = Number(
-  process.env.STORE_REQUEST_TIMEOUT_HEAVY_MS || 180000
-);
 
 interface StoreRequestOptions {
   timeout?: number;

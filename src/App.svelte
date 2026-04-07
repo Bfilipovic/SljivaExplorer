@@ -6,13 +6,15 @@
   import VerificationPage from "./lib/components/VerificationPage.svelte";
   import TermsOfServicePage from "./lib/components/TermsOfServicePage.svelte";
   import TermsOfServiceModal from "./lib/components/TermsOfServiceModal.svelte";
-  import type { ExplorerResult, Pagination, StoreInfo } from "./lib/types";
-  import { unifiedSearch, fetchStores, fetchTransactionParts } from "./lib/api";
+  import type { ExplorerResult, Pagination, SearchMode, StoreInfo } from "./lib/types";
+  import { searchExplorer, fetchTransactionParts, fetchStores } from "./lib/api";
 
   const pageSize = 50;
 
   let query = "";
+  let searchMode: SearchMode = "part";
   let loading = false;
+  let txPartsLoading = false;
   let error: string | null = null;
   let result: ExplorerResult | null = null;
   let pagination: Pagination | null = null;
@@ -28,6 +30,7 @@
   type HistoryEntry = {
     query: string;
     storeId: string | null;
+    mode: SearchMode;
   };
   let searchHistory: HistoryEntry[] = [];
   let historyIndex = -1; // Current position in history (-1 means no history)
@@ -91,18 +94,24 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     error = null;
 
     try {
-      const data = await unifiedSearch(input, { 
-        page, 
-        pageSize,
-        storeId: storeId || undefined
-      });
+      const data =
+        searchMode === "part"
+          ? await searchExplorer("part", input, {
+              page,
+              pageSize,
+              storeId: storeId || undefined
+            })
+          : await searchExplorer("transaction", input, {
+              storeId: storeId || undefined
+            });
+
       result = data;
       pagination = data.pagination;
-      currentPage = page;
+      currentPage = searchMode === "part" ? page : 0;
 
       // Add to history if not navigating through history
       if (addToHistory && !isNavigatingHistory) {
-        const newEntry: HistoryEntry = { query: input, storeId };
+        const newEntry: HistoryEntry = { query: input, storeId, mode: searchMode };
         // Remove any forward history (if we're not at the end)
         if (historyIndex < searchHistory.length - 1) {
           searchHistory = searchHistory.slice(0, historyIndex + 1);
@@ -121,43 +130,41 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     }
   }
 
-  async function handleSearch(event: CustomEvent<{ query: string; storeId?: string | null }>) {
+  async function handleSearch(
+    event: CustomEvent<{ query: string; storeId?: string | null; mode?: SearchMode }>
+  ) {
     query = event.detail.query;
-    selectedStoreId = event.detail.storeId ?? null;
+    if (event.detail.mode !== undefined) {
+      searchMode = event.detail.mode;
+    }
+    if (event.detail.storeId !== undefined) {
+      selectedStoreId = event.detail.storeId ?? null;
+    }
     await executeSearch(query, 0, selectedStoreId, true);
   }
 
-  /** Same store that served transaction lookup (aggregator sets transaction.storeId). */
-  function storeIdForTransactionParts(): string | undefined {
-    if (!result || result.kind !== "transaction") return selectedStoreId || undefined;
-    const fromTx = result.transaction.storeId?.trim();
-    if (fromTx) return fromTx;
-    return selectedStoreId || undefined;
-  }
-
-  async function handleLoadTransactionParts(event: CustomEvent<{ page?: number }>) {
+  async function handleLoadTransactionParts(event: CustomEvent<{ page: number }>) {
     if (!result || result.kind !== "transaction") return;
-    const page = Math.max(0, event.detail?.page ?? 0);
-    loading = true;
+    const page = event.detail.page;
+    txPartsLoading = true;
     error = null;
     try {
       const data = await fetchTransactionParts(result.transaction._id, {
         page,
         pageSize,
-        storeId: storeIdForTransactionParts(),
+        storeId: selectedStoreId || undefined
       });
       result = {
         ...result,
         parts: data.parts,
-        partsLoaded: true,
         pagination: data.pagination,
+        partsLoaded: true,
+        partsNote: data.note ?? null
       };
-      pagination = data.pagination;
-      currentPage = page;
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to load parts";
     } finally {
-      loading = false;
+      txPartsLoading = false;
     }
   }
 
@@ -168,6 +175,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       isNavigatingHistory = true;
       query = entry.query;
       selectedStoreId = entry.storeId;
+      searchMode = entry.mode;
       await executeSearch(entry.query, 0, entry.storeId, false);
     }
   }
@@ -179,6 +187,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
       isNavigatingHistory = true;
       query = entry.query;
       selectedStoreId = entry.storeId;
+      searchMode = entry.mode;
       await executeSearch(entry.query, 0, entry.storeId, false);
     }
   }
@@ -192,15 +201,9 @@ Before Users make any decisions involving the Offerings, Users should seek indep
   }
 
   async function goToPage(page: number) {
-    if (!pagination) return;
+    if (!pagination || result?.kind !== "part") return;
     const pages = totalPages();
     if (page < 0 || page >= pages) return;
-    if (result?.kind === "transaction" && result.partsLoaded) {
-      await handleLoadTransactionParts(
-        new CustomEvent("loadtransactionparts", { detail: { page } })
-      );
-      return;
-    }
     await executeSearch(query, page, selectedStoreId);
   }
 
@@ -315,6 +318,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     <div class="search-panel">
       <SearchPanel
         bind:query
+        bind:searchMode
         {loading}
         {error}
         {stores}
@@ -329,10 +333,11 @@ Before Users make any decisions involving the Offerings, Users should seek indep
         {canGoBack}
         {canGoForward}
         {loading}
+        partsLoading={txPartsLoading}
         onGoBack={goBack}
         onGoForward={goForward}
         on:search={handleSearch}
-        on:loadtransactionparts={handleLoadTransactionParts}
+        on:loadTransactionParts={handleLoadTransactionParts}
         on:navigateToVerification={() => {
           setActiveSection('verification');
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -364,7 +369,7 @@ Before Users make any decisions involving the Offerings, Users should seek indep
     </div>
   {/if}
 
-  {#if activeSection === 'search' && pagination && pagination.total > pagination.limit}
+  {#if activeSection === 'search' && result?.kind === 'part' && pagination && pagination.total > pagination.limit}
     <nav class="pager">
       <button
         type="button"

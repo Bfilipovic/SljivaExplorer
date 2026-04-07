@@ -16,10 +16,8 @@ export default defineConfig(({ mode }) => {
         "/api/explorer": {
           target: explorerApiUrl,
           changeOrigin: true,
-          secure: false,
-          // Match storeClient heavy timeout so large GIFT_CLAIM/MINT detail requests finish in dev
-          timeout: 180_000,
-          proxyTimeout: 180_000,
+          secure: false
+          // No rewrite needed - path is passed through as-is
         },
         // Proxy other API calls to main store backend (excludes /api/explorer)
         "^/api/(?!explorer)": {

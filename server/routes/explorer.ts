@@ -6,11 +6,7 @@
 
 import express from "express";
 import { getStores, getStoreById } from "../config/stores.js";
-import {
-  queryStore,
-  queryStores,
-  STORE_REQUEST_TIMEOUT_HEAVY_MS,
-} from "../utils/storeClient.js";
+import { queryStore, queryStores } from "../utils/storeClient.js";
 
 const router = express.Router();
 
@@ -196,6 +192,12 @@ function parsePagination(query: express.Request["query"]) {
   const page = Math.max(0, parseInt(String(query.page ?? "0"), 10) || 0);
   const skip = Math.max(0, parseInt(String(query.skip ?? String(page * limit)), 10) || page * limit);
   return { skip, limit, page };
+}
+
+/** Pagination for transaction parts: backend caps at 50 per page. */
+function parsePaginationTxParts(query: express.Request["query"]) {
+  const { skip, limit, page } = parsePagination(query);
+  return { skip, limit: Math.min(limit, 50), page };
 }
 
 /**
@@ -408,7 +410,7 @@ router.get("/parts/:partHash", async (req, res) => {
 /**
  * GET /api/explorer/transactions/lookup?q=
  *
- * Resolves transaction via store indexes only (id → Arweave → chain). No parts.
+ * Resolves a transaction by Mongo _id, arweaveTxId, or chainTx (backend order).
  */
 router.get("/transactions/lookup", async (req, res) => {
   try {
@@ -417,8 +419,6 @@ router.get("/transactions/lookup", async (req, res) => {
       return res.status(400).json({ error: "Missing q parameter" });
     }
     const storeId = req.query.storeId as string | undefined;
-    const queryParams: Record<string, string> = { q };
-    if (storeId) queryParams.storeId = storeId;
 
     if (storeId) {
       const store = getStoreById(storeId);
@@ -429,7 +429,7 @@ router.get("/transactions/lookup", async (req, res) => {
       const response = await queryStore<{
         transaction: any;
         matchedBy: string;
-      }>(store, `/transactions/lookup`, queryParams);
+      }>(store, `/transactions/lookup`, { q });
 
       if (response.error) {
         return res.status(502).json({
@@ -439,30 +439,14 @@ router.get("/transactions/lookup", async (req, res) => {
         });
       }
 
-      if (!response.data?.transaction) {
+      if (!response.data) {
         return res.status(404).json({ error: "Transaction not found" });
       }
 
-      let nft = null;
-      const transaction = response.data.transaction;
-      if (transaction?.nftId) {
-        try {
-          const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
-          const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
-            headers: { Accept: "application/json" }
-          });
-          if (nftResponse.ok) {
-            nft = await nftResponse.json();
-          }
-        } catch (err) {
-          console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
-        }
-      }
-
+      const { transaction, matchedBy } = response.data;
       return res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
-        matchedBy: response.data.matchedBy,
-        nft
+        matchedBy
       });
     }
 
@@ -474,10 +458,9 @@ router.get("/transactions/lookup", async (req, res) => {
     const responses = await queryStores<{
       transaction: any;
       matchedBy: string;
-    }>(stores, `/transactions/lookup`, queryParams);
+    }>(stores, `/transactions/lookup`, { q });
 
     const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
-
     for (const response of responses) {
       if (response.error) {
         errors.push({
@@ -485,37 +468,22 @@ router.get("/transactions/lookup", async (req, res) => {
           storeName: response.storeName,
           error: response.error
         });
-        continue;
-      }
-      if (response.data?.transaction) {
-        const transaction = response.data.transaction;
-        let nft = null;
-        const store = getStoreById(response.storeId);
-        if (store && transaction?.nftId) {
-          try {
-            const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
-            const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
-              headers: { Accept: "application/json" }
-            });
-            if (nftResponse.ok) {
-              nft = await nftResponse.json();
-            }
-          } catch (err) {
-            console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
-          }
-        }
-        return res.json({
-          transaction: enrichTransaction(transaction, response.storeId, response.storeName),
-          matchedBy: response.data.matchedBy,
-          nft,
-          ...(errors.length > 0 && { errors })
-        });
       }
     }
 
-    return res.status(404).json({
-      error: "Transaction not found in any store",
-      errors: errors.length > 0 ? errors : undefined
+    const hit = responses.find((r) => !r.error && r.data);
+    if (!hit?.data) {
+      return res.status(404).json({
+        error: "Transaction not found in any store",
+        errors: errors.length > 0 ? errors : undefined
+      });
+    }
+
+    const { transaction, matchedBy } = hit.data;
+    res.json({
+      transaction: enrichTransaction(transaction, hit.storeId, hit.storeName),
+      matchedBy,
+      ...(errors.length > 0 && { errors })
     });
   } catch (err) {
     console.error("[Explorer API] Error in /transactions/lookup:", err);
@@ -527,44 +495,35 @@ router.get("/transactions/lookup", async (req, res) => {
 
 /**
  * GET /api/explorer/transactions/id/:txId/parts
+ *
+ * Paginated parts for a transaction (forwarded to store backends).
  */
 router.get("/transactions/id/:txId/parts", async (req, res) => {
   try {
     const { txId } = req.params;
-    const { skip, limit } = parsePagination(req.query);
+    const { skip, limit } = parsePaginationTxParts(req.query);
     const storeId = req.query.storeId as string | undefined;
 
-    const queryParams: Record<string, string> = {
+    const queryParams = {
       skip: String(skip),
       limit: String(limit)
     };
-    if (storeId) queryParams.storeId = storeId;
 
-    const stores = getStores();
-    if (stores.length === 0) {
-      return res.status(500).json({ error: "No stores configured" });
-    }
+    if (storeId) {
+      const store = getStoreById(storeId);
+      if (!store) {
+        return res.status(404).json({ error: `Store '${storeId}' not found` });
+      }
 
-    const storeFromParam = storeId ? getStoreById(storeId) : undefined;
-    if (storeId && !storeFromParam) {
-      return res.status(404).json({ error: `Store '${storeId}' not found` });
-    }
-
-    // One backend: always use a single queryStore (no "any store" messaging, same path as ?storeId=…).
-    const loneStore = storeFromParam ?? (stores.length === 1 ? stores[0] : undefined);
-
-    if (loneStore) {
       const response = await queryStore<{
         parts: any[];
         pagination: { total: number; skip: number; limit: number };
         note?: string;
-      }>(loneStore, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
-        timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
-      });
+      }>(store, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams);
 
       if (response.error) {
         return res.status(502).json({
-          error: `Store '${loneStore.id}' error: ${response.error}`,
+          error: `Store '${storeId}' error: ${response.error}`,
           storeId: response.storeId,
           storeName: response.storeName
         });
@@ -582,17 +541,18 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
       });
     }
 
+    const stores = getStores();
+    if (stores.length === 0) {
+      return res.status(500).json({ error: "No stores configured" });
+    }
+
     const responses = await queryStores<{
       parts: any[];
       pagination: { total: number; skip: number; limit: number };
       note?: string;
-    }>(stores, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams, {
-      timeout: STORE_REQUEST_TIMEOUT_HEAVY_MS,
-    });
+    }>(stores, `/transactions/id/${encodeURIComponent(txId)}/parts`, queryParams);
 
     const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
-    const successes: typeof responses = [];
-
     for (const response of responses) {
       if (response.error) {
         errors.push({
@@ -600,44 +560,23 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
           storeName: response.storeName,
           error: response.error
         });
-        continue;
       }
-
-      if (!response.data) {
-        continue;
-      }
-      const rawParts = response.data.parts;
-      if (rawParts !== undefined && !Array.isArray(rawParts)) {
-        continue;
-      }
-      successes.push(response);
     }
 
-    // Prefer a body that actually has rows; otherwise first successful JSON (even total 0).
-    const withRows = successes.filter((r) => {
-      const partsLen = r.data?.parts?.length ?? 0;
-      const total = r.data?.pagination?.total ?? 0;
-      return partsLen > 0 || total > 0;
-    });
-    const chosen = withRows[0] ?? successes[0];
-
-    if (chosen?.data) {
-      const parts = Array.isArray(chosen.data.parts) ? chosen.data.parts : [];
-      const { pagination, note } = chosen.data;
-      return res.json({
-        parts: parts.map((part: any) => enrichPart(part, chosen.storeId, chosen.storeName)),
-        pagination,
-        ...(note && { note }),
-        ...(errors.length > 0 && { errors })
+    const hit = responses.find((r) => !r.error && r.data);
+    if (!hit?.data) {
+      return res.status(404).json({
+        error: "Transaction not found in any store",
+        errors: errors.length > 0 ? errors : undefined
       });
     }
 
-    return res.status(404).json({
-      error:
-        errors.length > 0
-          ? `Could not load transaction parts. Store errors: ${errors.map((e) => `${e.storeId}: ${e.error}`).join("; ")}`
-          : "Transaction not found in any store",
-      errors: errors.length > 0 ? errors : undefined
+    const { parts = [], pagination, note } = hit.data;
+    res.json({
+      parts: parts.map((part: any) => enrichPart(part, hit.storeId, hit.storeName)),
+      pagination,
+      ...(note && { note }),
+      ...(errors.length > 0 && { errors })
     });
   } catch (err) {
     console.error("[Explorer API] Error in /transactions/id/:txId/parts:", err);
@@ -649,15 +588,19 @@ router.get("/transactions/id/:txId/parts", async (req, res) => {
 
 /**
  * GET /api/explorer/transactions/id/:txId
- *
- * Transaction document only (no parts query on the store).
+ * 
+ * Look up a transaction by database ID.
  */
 router.get("/transactions/id/:txId", async (req, res) => {
   try {
     const { txId } = req.params;
+    const { skip, limit } = parsePagination(req.query);
     const storeId = req.query.storeId as string | undefined;
-    const queryParams: Record<string, string> = {};
-    if (storeId) queryParams.storeId = storeId;
+
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
 
     if (storeId) {
       const store = getStoreById(storeId);
@@ -686,6 +629,7 @@ router.get("/transactions/id/:txId", async (req, res) => {
 
       const { transaction, parts = [], partialTransactions, pagination } = response.data;
 
+      // Fetch NFT metadata from the store
       let nft = null;
       if (transaction?.nftId) {
         try {
@@ -701,83 +645,84 @@ router.get("/transactions/id/:txId", async (req, res) => {
         }
       }
 
-      return res.json({
+      res.json({
         transaction: enrichTransaction(transaction, response.storeId, response.storeName),
         parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
         nft,
         partialTransactions: [],
         pagination: pagination ?? null
       });
-    }
-
-    const stores = getStores();
-    if (stores.length === 0) {
-      return res.status(500).json({ error: "No stores configured" });
-    }
-
-    const responses = await queryStores<{
-      transaction: any;
-      parts?: any[];
-      partialTransactions: any[];
-      pagination?: { total: number; skip: number; limit: number } | null;
-    }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
-
-    const results: any[] = [];
-    const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
-
-    for (const response of responses) {
-      if (response.error) {
-        errors.push({
-          storeId: response.storeId,
-          storeName: response.storeName,
-          error: response.error
-        });
-        continue;
+    } else {
+      const stores = getStores();
+      if (stores.length === 0) {
+        return res.status(500).json({ error: "No stores configured" });
       }
 
-      if (response.data) {
-        const { transaction, parts = [], pagination } = response.data;
+      const responses = await queryStores<{
+        transaction: any;
+        parts?: any[];
+        partialTransactions: any[];
+        pagination?: { total: number; skip: number; limit: number } | null;
+      }>(stores, `/transactions/id/${encodeURIComponent(txId)}`, queryParams);
 
-        let nft = null;
-        if (transaction?.nftId) {
-          try {
-            const store = getStoreById(response.storeId);
-            if (store) {
-              const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
-              const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
-                headers: { Accept: "application/json" }
-              });
-              if (nftResponse.ok) {
-                nft = await nftResponse.json();
-              }
-            }
-          } catch (err) {
-            console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
-          }
+      const results: any[] = [];
+      const errors: Array<{ storeId: string; storeName: string; error: string }> = [];
+
+      for (const response of responses) {
+        if (response.error) {
+          errors.push({
+            storeId: response.storeId,
+            storeName: response.storeName,
+            error: response.error
+          });
+          continue;
         }
 
-        results.push({
-          transaction: enrichTransaction(transaction, response.storeId, response.storeName),
-          parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
-          nft,
-          partialTransactions: [],
-          pagination: pagination ?? null
+        if (response.data) {
+          const { transaction, parts = [], pagination } = response.data;
+          
+          // Fetch NFT metadata from the store
+          let nft = null;
+          if (transaction?.nftId) {
+            try {
+              const store = getStoreById(response.storeId);
+              if (store) {
+                const nftBaseUrl = store.baseUrl.replace("/api/explorer", "");
+                const nftResponse = await fetch(`${nftBaseUrl}/api/nfts/${encodeURIComponent(transaction.nftId)}`, {
+                  headers: { Accept: "application/json" }
+                });
+                if (nftResponse.ok) {
+                  nft = await nftResponse.json();
+                }
+              }
+            } catch (err) {
+              console.warn(`[Explorer API] Failed to fetch NFT metadata for ${transaction.nftId}:`, err);
+            }
+          }
+          
+          results.push({
+            transaction: enrichTransaction(transaction, response.storeId, response.storeName),
+            parts: parts.map((part: any) => enrichPart(part, response.storeId, response.storeName)),
+            nft,
+            partialTransactions: [],
+            pagination: pagination ?? null
+          });
+        }
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          error: "Transaction not found in any store",
+          errors: errors.length > 0 ? errors : undefined
         });
       }
-    }
 
-    if (results.length === 0) {
-      return res.status(404).json({
-        error: "Transaction not found in any store",
-        errors: errors.length > 0 ? errors : undefined
+      const firstResult = results[0];
+      res.json({
+        ...firstResult,
+        ...(errors.length > 0 && { errors })
       });
     }
-
-    const firstResult = results[0];
-    return res.json({
-      ...firstResult,
-      ...(errors.length > 0 && { errors })
-    });
   } catch (err) {
     console.error("[Explorer API] Error in /transactions/id/:txId:", err);
     res.status(500).json({
@@ -794,10 +739,13 @@ router.get("/transactions/id/:txId", async (req, res) => {
 router.get("/transactions/chain/:chainTx", async (req, res) => {
   try {
     const { chainTx } = req.params;
+    const { skip, limit } = parsePagination(req.query);
     const storeId = req.query.storeId as string | undefined;
 
-    const queryParams: Record<string, string> = {};
-    if (storeId) queryParams.storeId = storeId;
+    const queryParams = {
+      skip: String(skip),
+      limit: String(limit)
+    };
 
     if (storeId) {
       const store = getStoreById(storeId);

@@ -1,45 +1,40 @@
 <script lang="ts">
-  import type { ExplorerPart, Pagination } from "../types";
+  import type { ExplorerPart, Pagination, StoreInfo } from "../types";
   import { formatAddress } from "../utils/format";
   import { createEventDispatcher } from "svelte";
 
   export let parts: ExplorerPart[] = [];
   export let pagination: Pagination | null = null;
-  export let loadPartsDisabled = false;
+
+  export let showPager = false;
+
   const dispatch = createEventDispatcher<{
-    search: { query: string };
-    loadparts: { page?: number };
+    search: { query: string; mode?: "part" | "transaction" };
+    partspage: { page: number };
   }>();
 
   function handlePartHashClick(partHash: string, event: MouseEvent) {
     event.preventDefault();
-    dispatch("search", { query: partHash });
+    dispatch("search", { query: partHash, mode: "part" });
   }
 
   $: rangeStart = pagination && pagination.total > 0 ? pagination.skip + 1 : parts.length ? 1 : 0;
   $: rangeEnd = pagination && pagination.total > 0
     ? Math.min(pagination.skip + pagination.limit, pagination.total)
     : parts.length;
-  /** Lookup returns pagination:null; first parts fetch always sets pagination (even when total is 0). */
-  $: showLoadPartsPrompt = parts.length === 0 && pagination == null;
+  $: currentPage =
+    pagination && pagination.limit > 0 ? Math.floor(pagination.skip / pagination.limit) : 0;
+  $: totalPages =
+    pagination && pagination.total > 0
+      ? Math.max(1, Math.ceil(pagination.total / pagination.limit))
+      : 1;
+  $: pagerVisible = showPager && pagination && pagination.total > pagination.limit;
 </script>
 
 <section class="card {parts.length ? 'table-card' : ''}">
   <h3>Parts in Transaction</h3>
-  {#if showLoadPartsPrompt}
-    <p class="hint">
-      Load part rows on demand so large transactions stay fast to open.
-    </p>
-    <button
-      type="button"
-      class="load-parts-btn"
-      disabled={loadPartsDisabled}
-      on:click={() => dispatch("loadparts", { page: 0 })}
-    >
-      Show parts
-    </button>
-  {:else if !parts.length}
-    <p class="empty">No parts found for this transaction.</p>
+  {#if !parts.length}
+    <p class="empty">No parts found.</p>
   {:else}
     {#if pagination}
       <div class="summary">
@@ -77,6 +72,27 @@
         </tbody>
       </table>
     </div>
+    {#if pagerVisible}
+      <div class="pager">
+        <button
+          type="button"
+          class="pager__btn"
+          disabled={currentPage <= 0}
+          on:click={() => dispatch("partspage", { page: currentPage - 1 })}
+        >
+          Previous
+        </button>
+        <span class="pager__info">Page {currentPage + 1} of {totalPages}</span>
+        <button
+          type="button"
+          class="pager__btn"
+          disabled={currentPage + 1 >= totalPages}
+          on:click={() => dispatch("partspage", { page: currentPage + 1 })}
+        >
+          Next
+        </button>
+      </div>
+    {/if}
   {/if}
 </section>
 
@@ -150,33 +166,6 @@
     color: var(--text-muted);
   }
 
-  .hint {
-    margin: 0 0 1rem;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    line-height: 1.5;
-  }
-
-  .load-parts-btn {
-    padding: 0.55rem 1.1rem;
-    border-radius: 0.5rem;
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--btn-primary-text, #fff);
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 0.9rem;
-  }
-
-  .load-parts-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .load-parts-btn:not(:disabled):hover {
-    filter: brightness(1.05);
-  }
-
   .hash-link {
     background: transparent;
     border: none;
@@ -191,6 +180,36 @@
 
   .hash-link:hover {
     text-decoration: underline;
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem 1rem;
+    border-top: 1px solid var(--card-border);
+    flex-shrink: 0;
+  }
+
+  .pager__btn {
+    padding: 0.4rem 0.9rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--card-border);
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .pager__btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .pager__info {
+    font-size: 0.85rem;
+    color: var(--text-muted);
   }
 </style>
 

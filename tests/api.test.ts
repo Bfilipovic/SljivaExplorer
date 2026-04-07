@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchExplorer, fetchStores } from "../src/lib/api";
+import { searchExplorer, fetchStores, fetchTransactionParts } from "../src/lib/api";
 
 function mockResponse(response: unknown, ok = true) {
   return {
@@ -48,22 +48,20 @@ describe("searchExplorer", () => {
   it("fetches part data", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          mockResponse({
-            part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
-            nft: {
-              _id: "nft",
-              name: "Test NFT",
-              description: "Desc",
-              creator: "0xabc",
-              imageurl: "https://example.com/img.png"
-            },
-            partialTransactions: [],
-            pagination: { total: 1, skip: 0, limit: 50 }
-          })
-        )
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+          nft: {
+            _id: "nft",
+            name: "Test NFT",
+            description: "Desc",
+            creator: "0xabc",
+            imageurl: "https://example.com/img.png"
+          },
+          partialTransactions: [],
+          pagination: { total: 1, skip: 0, limit: 50 }
+        })
+      )
     );
 
     const result = await searchExplorer("part", "hash");
@@ -78,22 +76,13 @@ describe("searchExplorer", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    fetchMock
-      .mockResolvedValueOnce(
-        mockResponse({
-          part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
-          partialTransactions: [],
-          pagination: { total: 1, skip: 0, limit: 50 }
-        })
-      )
-      .mockResolvedValueOnce(
-        mockResponse({
-          _id: "nft",
-          name: "Test NFT",
-          description: "Desc",
-          creator: "0xabc"
-        })
-      );
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        part: { _id: "hash", part_no: 1, parent_hash: "nft", owner: "0x0", listing: null },
+        partialTransactions: [],
+        pagination: { total: 1, skip: 0, limit: 50 }
+      })
+    );
 
     await searchExplorer("part", "hash", { storeId: "main" });
 
@@ -112,6 +101,53 @@ describe("searchExplorer", () => {
     );
 
     await expect(searchExplorer("part", "missing")).rejects.toThrow("Not found");
+  });
+
+  it("transaction mode uses /transactions/lookup", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        transaction: {
+          _id: "507f1f77bcf86cd799439011",
+          type: "MINT",
+          timestamp: "2020-01-01T00:00:00.000Z",
+          quantity: 1
+        },
+        matchedBy: "_id"
+      })
+    );
+
+    const result = await searchExplorer("transaction", "507f1f77bcf86cd799439011");
+    expect(result.kind).toBe("transaction");
+    if (result.kind === "transaction") {
+      expect(result.transaction._id).toBe("507f1f77bcf86cd799439011");
+      expect(result.matchedBy).toBe("_id");
+      expect(result.partsLoaded).toBe(false);
+      expect(result.parts).toEqual([]);
+    }
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/transactions/lookup");
+    expect(url).toContain("q=");
+  });
+
+  it("fetchTransactionParts requests paginated parts path", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        parts: [],
+        pagination: { total: 0, skip: 0, limit: 50 }
+      })
+    );
+
+    await fetchTransactionParts("507f1f77bcf86cd799439011", { page: 1, storeId: "main" });
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/transactions/id/");
+    expect(url).toContain("/parts");
+    expect(url).toContain("skip=50");
+    expect(url).toContain("storeId=main");
   });
 });
 
